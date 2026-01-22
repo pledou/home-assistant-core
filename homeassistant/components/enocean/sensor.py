@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import struct
 
+from enocean.protocol.ventilairsec import (  # pylint: disable=no-name-in-module
+    VentilairsecParser,
+)
+from enocean.protocol.ventilairsec_eep import (  # pylint: disable=no-name-in-module
+    get_field_value_with_enum,
+)
 from enocean.utils import combine_hex
 import voluptuous as vol
 
@@ -19,6 +26,7 @@ from homeassistant.const import (
     CONF_DEVICE_CLASS,
     CONF_ID,
     CONF_NAME,
+    CONF_UNIT_OF_MEASUREMENT,
     PERCENTAGE,
     STATE_CLOSED,
     STATE_OPEN,
@@ -30,12 +38,14 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
+from .const import LOGGER
 from .entity import EnOceanEntity
 
 CONF_MAX_TEMP = "max_temp"
 CONF_MIN_TEMP = "min_temp"
 CONF_RANGE_FROM = "range_from"
 CONF_RANGE_TO = "range_to"
+CONF_DATA_FIELD = "data_field"
 
 DEFAULT_NAME = "EnOcean sensor"
 
@@ -43,6 +53,7 @@ SENSOR_TYPE_HUMIDITY = "humidity"
 SENSOR_TYPE_POWER = "powersensor"
 SENSOR_TYPE_TEMPERATURE = "temperature"
 SENSOR_TYPE_WINDOWHANDLE = "windowhandle"
+SENSOR_TYPE_VENTILAIRSEC = "ventilairsec"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -96,6 +107,8 @@ PLATFORM_SCHEMA = SENSOR_PLATFORM_SCHEMA.extend(
         vol.Optional(CONF_MIN_TEMP, default=0): vol.Coerce(int),
         vol.Optional(CONF_RANGE_FROM, default=255): cv.positive_int,
         vol.Optional(CONF_RANGE_TO, default=0): cv.positive_int,
+        vol.Optional(CONF_UNIT_OF_MEASUREMENT): cv.string,
+        vol.Optional(CONF_DATA_FIELD): cv.string,
     }
 )
 
@@ -137,6 +150,22 @@ def setup_platform(
 
     elif sensor_type == SENSOR_TYPE_WINDOWHANDLE:
         entities = [EnOceanWindowHandle(dev_id, dev_name, SENSOR_DESC_WINDOWHANDLE)]
+
+    elif sensor_type == SENSOR_TYPE_VENTILAIRSEC:
+        # Ventilairsec MSC telegram sensor
+        data_field = config.get(CONF_DATA_FIELD)
+        unit = config.get(CONF_UNIT_OF_MEASUREMENT)
+        device_class = config.get(CONF_DEVICE_CLASS)
+
+        entities = [
+            VentilairsecSensor(
+                dev_id,
+                dev_name,
+                data_field=data_field,
+                unit=unit,
+                device_class=device_class,
+            )
+        ]
 
     add_entities(entities)
 
@@ -276,3 +305,95 @@ class EnOceanWindowHandle(EnOceanSensor):
             self._attr_native_value = "tilt"
 
         self.schedule_update_ha_state()
+
+
+class VentilairsecSensor(EnOceanSensor):
+    """Representation of a Ventilairsec EnOcean sensor device.
+
+    EEPs (EnOcean Equipment Profiles):
+    - 0xD1079 (MSC Telegram Ventilairsec)
+
+    This sensor supports the Ventilairsec ventilation system with multiple
+    temperature, humidity, and status sensors. It uses the enocean library's
+    VentilairsecParser to decode MSC telegrams automatically, eliminating
+    the need for redundant RORG/FUNC/TYPE/command parameters.
+    """
+
+    def __init__(
+        self,
+        dev_id: list[int],
+        dev_name: str,
+        *,
+        data_field: str | None = None,
+        unit: str | None = None,
+        device_class: SensorDeviceClass | str | None = None,
+    ) -> None:
+        """Initialize the Ventilairsec sensor device."""
+        # Convert string device class to enum if needed
+        device_class_enum: SensorDeviceClass | None = None
+        if isinstance(device_class, str):
+            try:
+                device_class_enum = SensorDeviceClass(device_class)
+            except ValueError:
+                device_class_enum = None
+        elif isinstance(device_class, SensorDeviceClass):
+            device_class_enum = device_class
+
+        # Create a custom description for this sensor
+        description = EnOceanSensorEntityDescription(
+            key=f"ventilairsec_{data_field or 'sensor'}",
+            name=dev_name,
+            native_unit_of_measurement=unit,
+            device_class=device_class_enum,
+            state_class=SensorStateClass.MEASUREMENT if unit else None,
+            unique_id=lambda dev_id: f"{combine_hex(dev_id)}-{data_field or 'sensor'}",
+        )
+        super().__init__(dev_id, dev_name, description)
+        self._data_field = data_field
+
+    def value_changed(self, packet):
+        """Update the internal state of the sensor.
+
+        Automatically parses Ventilairsec MSC telegram format using the
+        enocean library's VentilairsecParser. No manual RORG/FUNC/TYPE
+        specification required - it's handled transparently.
+        """
+        if not packet.data or len(packet.data) < 2:
+            return
+
+        try:
+            # Parse the raw packet data
+            parsed_data = VentilairsecParser.parse_packet(packet.data)
+
+            if not parsed_data or self._data_field not in parsed_data:
+                return
+
+            # Get the field value with enum mapping applied
+            value = get_field_value_with_enum(parsed_data, self._data_field)
+            cmd = parsed_data.get("CMD")
+
+            LOGGER.debug(
+                "Ventilairsec %s: CMD=%s, Field=%s, Value=%s",
+                self._attr_name,
+                cmd,
+                self._data_field,
+                value,
+            )
+
+            if value is not None:
+                self._attr_native_value = value
+                self.schedule_update_ha_state()
+
+        except ImportError:
+            # Fallback: enocean library not available, use basic parsing
+            LOGGER.warning(
+                "EnOcean library's VentilairsecParser not available for %s",
+                self._attr_name,
+            )
+            return
+        except (ValueError, KeyError, OSError, TypeError, struct.error) as err:
+            LOGGER.error(
+                "Error parsing Ventilairsec packet for %s: %s",
+                self._attr_name,
+                err,
+            )

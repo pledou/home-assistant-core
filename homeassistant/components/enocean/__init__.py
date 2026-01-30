@@ -1,18 +1,34 @@
 """Support for EnOcean devices."""
 
+import logging
+
+from enocean.protocol.eep import get_eep as _get_eep
 import voluptuous as vol
 
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import CONF_DEVICE
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import config_validation as cv, device_registry as dr
+from homeassistant.helpers.dispatcher import (
+    async_dispatcher_connect,
+    async_dispatcher_send,
+)
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DATA_ENOCEAN, DOMAIN, ENOCEAN_DONGLE
-from .dongle import EnOceanDongle
+from .const import DATA_ENOCEAN, DOMAIN, ENOCEAN_DONGLE, PLATFORMS
+from .dongle import SIGNAL_DISCOVER_DEVICE, EnOceanDongle
+from .eep_devices import load_device_profile_from_packet
+from .entity import format_device_id_hex
+from .types import DiscoveryInfo, EepProfile
+
+# Signal sent when new entities should be added (after device discovery)
+SIGNAL_ADD_ENTITIES = "enocean_add_entities"
+
+_LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = vol.Schema(
-    {DOMAIN: vol.Schema({vol.Required(CONF_DEVICE): cv.string})}, extra=vol.ALLOW_EXTRA
+    {DOMAIN: vol.Schema({vol.Required(CONF_DEVICE): cv.string})},
+    extra=vol.ALLOW_EXTRA,
 )
 
 
@@ -22,6 +38,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     if DOMAIN not in config:
         return True
 
+    enocean_config = config[DOMAIN]
+
     if hass.config_entries.async_entries(DOMAIN):
         # We can only have one dongle. If there is already one in the config,
         # there is no need to import the yaml based config.
@@ -29,7 +47,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     hass.async_create_task(
         hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": SOURCE_IMPORT}, data=config[DOMAIN]
+            DOMAIN, context={"source": SOURCE_IMPORT}, data=enocean_config
         )
     )
 
@@ -37,11 +55,183 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
-    """Set up an EnOcean dongle for the given entry."""
+    """Set up the EnOcean dongle (following ZHA pattern)."""
     enocean_data = hass.data.setdefault(DATA_ENOCEAN, {})
+
+    # Only the dongle config entry is supported
+    if CONF_DEVICE not in config_entry.data:
+        _LOGGER.warning("Config entry has no device path, skipping setup")
+        return False
+
     usb_dongle = EnOceanDongle(hass, config_entry.data[CONF_DEVICE])
     await usb_dongle.async_setup()
     enocean_data[ENOCEAN_DONGLE] = usb_dongle
+
+    # Set up platforms using modern config entry approach
+    await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
+
+    # Set up device discovery listener (ZHA-style: add to device registry)
+    async def async_device_discovered(discovery_info: DiscoveryInfo) -> None:
+        """Handle device discovery signal from dongle - add device to registry.
+
+        This async function processes device discovery and runs blocking EEP
+        file operations in the executor rather than inside the event loop.
+        """
+        device_id = discovery_info["device_id"]
+        # Convert device_id from list[int] to hex:hex:hex:hex format for device registry
+        device_id_hex = format_device_id_hex(device_id)
+
+        # Narrow the TypedDict to a local variable so types are preserved
+        eep_profile: EepProfile = discovery_info["eep_profile"]
+        rorg = eep_profile["rorg"]
+        func = eep_profile["rorg_func"]
+        type_ = eep_profile["rorg_type"]
+
+        device_registry = dr.async_get(hass)
+        # Check if device already exists before creating
+        existing_device = device_registry.async_get_device(
+            identifiers={(DOMAIN, device_id_hex)}
+        )
+
+        if existing_device is None:
+            # If python-enocean's EEP parser is available, check that the
+            # (RORG, FUNC, TYPE) tuple exists in the EEP database. The
+            # EEP.find_profile method will normalize multi-byte RORGs.
+            # If the python-enocean EEP parser is available, try to resolve the
+            # (RORG, FUNC, TYPE) tuple to a known profile. If not available or
+            # lookup fails, fall back to the simpler func presence check below.
+            # Defer any potentially blocking EEP parsing to the executor
+            # to avoid opening files in the event loop.
+            profile = None
+
+            if _get_eep is not None:
+                try:
+                    # Get cached EEP parser instance in executor (it may open files)
+                    _eep = await hass.async_add_executor_job(_get_eep)
+
+                    # Try to resolve the full <profile> element from the parser's
+                    # internal telegrams mapping. Calling into the mapping is
+                    # potentially file/CPU-bound, so run in the executor.
+                    def _get_full_profile(
+                        eep, rorg: int, func: int, ptype: int
+                    ) -> dict | None:
+                        try:
+                            return eep.telegrams[rorg][func][ptype]
+                        except (
+                            FileNotFoundError,
+                            OSError,
+                            ValueError,
+                            KeyError,
+                        ) as err:
+                            _LOGGER.warning(
+                                "Error getting eep profile for device %s rorg=0x%02x func=0x%02x type=0x%02x: %s",
+                                eep,
+                                rorg,
+                                func,
+                                ptype,
+                                err,
+                            )
+                            return None
+
+                    profile = await hass.async_add_executor_job(
+                        _get_full_profile, _eep, rorg, func, type_
+                    )
+
+                    # Fall back to the library's find_profile if direct lookup
+                    # did not return a full <profile> element (older library
+                    # behaviour may require it).
+                    if profile is None:
+                        profile = await hass.async_add_executor_job(
+                            _eep.find_profile, None, rorg, func, type_
+                        )
+                except (ValueError, TypeError, LookupError) as err:
+                    _LOGGER.debug("EEP profile lookup failed: %s", err)
+                    profile = None
+
+            if profile is None:
+                # If the EEP parser is not available, require func to be present
+                # before accepting the device; otherwise log a warning and skip.
+                if _eep is None:
+                    _LOGGER.error(
+                        "Unable to verify EEP profile for device %s as python-enocean EEP parser is not installed; "
+                    )
+                else:
+                    _LOGGER.warning(
+                        "Device %s has unknown EEP profile (rorg=0x%02x func=0x%02x type=0x%02x), skipping integration",
+                        device_id_hex,
+                        rorg,
+                        func,
+                        type_,
+                    )
+                    return
+
+            _LOGGER.info(
+                "Discovered EnOcean device: %s rorg=0x%02x, func=0x%02x type=0x%02x",
+                device_id_hex,
+                rorg,
+                func,
+                type_,
+            )
+
+            # Load and populate entities from the resolved EEP profile object
+            eep_profile_data = await hass.async_add_executor_job(
+                load_device_profile_from_packet,
+                {
+                    "rorg": rorg,
+                    "rorg_func": func,
+                    "rorg_type": type_,
+                    "eep_profile": profile,
+                },
+            )
+
+            if eep_profile_data:
+                entities = eep_profile_data
+
+                device_registry.async_get_or_create(
+                    config_entry_id=config_entry.entry_id,
+                    identifiers={(DOMAIN, device_id_hex)},
+                    name=f"{DOMAIN} {device_id_hex}",
+                    manufacturer="EnOcean",
+                    model=f"0x{rorg:02x} (func=0x{(func or 0):02x}, type=0x{type_:02x})",
+                )
+
+                _LOGGER.debug(
+                    "Creating %d entities for device %s from EEP profile",
+                    len(entities),
+                    device_id_hex,
+                )
+                # Signal platforms to add the generated entities
+                # Pass device_id (list[int]) for entity creation, use device_id_hex for device registry
+                async_dispatcher_send(
+                    hass,
+                    SIGNAL_ADD_ENTITIES,
+                    device_id,
+                    device_id_hex,
+                    entities,
+                    rorg,
+                    func,
+                    type_,
+                )
+            else:
+                # Signal platforms without entities if profile couldn't be loaded
+                _LOGGER.warning(
+                    "No entities created for device %s as EEP profile %02x-%02x-%02x could not be loaded, device has not been integrated",
+                    device_id_hex,
+                    rorg,
+                    func,
+                    type_,
+                )
+
+    # Register listener for device discovery signals
+    async def _handle_device_discovered(discovery_info: DiscoveryInfo) -> None:
+        """Handle device discovery signal from dispatcher."""
+        await async_device_discovered(discovery_info)
+
+    config_entry.async_on_unload(
+        async_dispatcher_connect(
+            hass, SIGNAL_DISCOVER_DEVICE, _handle_device_discovered
+        )
+    )
 
     return True
 
@@ -49,8 +239,42 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Unload EnOcean config entry."""
 
-    enocean_dongle = hass.data[DATA_ENOCEAN][ENOCEAN_DONGLE]
-    enocean_dongle.unload()
-    hass.data.pop(DATA_ENOCEAN)
+    enocean_data = hass.data.get(DATA_ENOCEAN, {})
+
+    enocean_dongle = enocean_data.get(ENOCEAN_DONGLE)
+    if enocean_dongle:
+        enocean_dongle.unload()
+
+    sensor_manager = enocean_data.get("sensor_manager")
+    if sensor_manager:
+        await sensor_manager.async_unload()
+
+    hass.data.pop(DATA_ENOCEAN, None)
 
     return True
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, config_entry: ConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """Remove a device from the EnOcean integration.
+
+    This allows users to delete discovered EnOcean devices from the UI.
+    The device will be re-discovered if it sends another packet.
+    """
+    # Check if device belongs to this config entry
+    if config_entry.entry_id not in device_entry.config_entries:
+        return False
+
+    # Check if device is an EnOcean device (has correct identifier format)
+    for identifier in device_entry.identifiers:
+        if identifier[0] == DOMAIN:
+            _LOGGER.info(
+                "Removing EnOcean device %s (%s) from integration",
+                device_entry.name,
+                identifier[1],
+            )
+            # Allow removal - device will be re-discovered if it sends packets
+            return True
+
+    return False

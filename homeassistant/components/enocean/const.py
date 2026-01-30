@@ -12,12 +12,16 @@ ERROR_INVALID_DONGLE_PATH = "invalid_dongle_path"
 
 SIGNAL_RECEIVE_MESSAGE = "enocean.receive_message"
 SIGNAL_SEND_MESSAGE = "enocean.send_message"
+SIGNAL_SENSOR_DETECTED = "enocean.sensor_detected"
 
 LOGGER = logging.getLogger(__package__)
 
 PLATFORMS = [
     Platform.BINARY_SENSOR,
+    Platform.BUTTON,
     Platform.LIGHT,
+    Platform.NUMBER,
+    Platform.SELECT,
     Platform.SENSOR,
     Platform.SWITCH,
 ]

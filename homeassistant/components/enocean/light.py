@@ -59,7 +59,7 @@ class EnOceanLight(EnOceanEntity, LightEntity):
 
     def __init__(self, sender_id: list[int], dev_id: list[int], dev_name: str) -> None:
         """Initialize the EnOcean light source."""
-        super().__init__(dev_id)
+        super().__init__(dev_id, data_field="brightness")
         self._sender_id = sender_id
         self._attr_unique_id = str(combine_hex(dev_id))
         self._attr_name = dev_name

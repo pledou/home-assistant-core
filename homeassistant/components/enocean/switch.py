@@ -4,62 +4,96 @@ from __future__ import annotations
 
 from typing import Any
 
-from enocean.utils import combine_hex
-import voluptuous as vol
-
-from homeassistant.components.switch import (
-    PLATFORM_SCHEMA as SWITCH_PLATFORM_SCHEMA,
-    SwitchEntity,
-)
-from homeassistant.const import CONF_ID, CONF_NAME, Platform
+from homeassistant.components.switch import SwitchEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_ID, CONF_NAME
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv, entity_registry as er
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity_platform import (
+    AddConfigEntryEntitiesCallback,
+    AddEntitiesCallback,
+)
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from .const import DOMAIN, LOGGER
-from .entity import EnOceanEntity
+from . import SIGNAL_ADD_ENTITIES
+from .const import DATA_ENOCEAN, DOMAIN, ENOCEAN_DONGLE, LOGGER
+from .dongle import SIGNAL_LEARNING_MODE_CHANGED
+from .entity import (
+    DynamicEnoceanEntity,
+    EnOceanEntity,
+    async_create_entities_from_eep,
+    format_device_id_hex_underscore,
+)
+from .types import EEPEntityDef
 
 CONF_CHANNEL = "channel"
-DEFAULT_NAME = "EnOcean Switch"
-
-PLATFORM_SCHEMA = SWITCH_PLATFORM_SCHEMA.extend(
-    {
-        vol.Required(CONF_ID): vol.All(cv.ensure_list, [vol.Coerce(int)]),
-        vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
-        vol.Optional(CONF_CHANNEL, default=0): cv.positive_int,
-    }
-)
 
 
-def generate_unique_id(dev_id: list[int], channel: int) -> str:
-    """Generate a valid unique id."""
-    return f"{combine_hex(dev_id)}-{channel}"
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Set up EnOcean switch entities."""
+    enocean_data = hass.data.get(DATA_ENOCEAN, {})
+    dongle = enocean_data.get(ENOCEAN_DONGLE)
 
+    if not dongle:
+        return
 
-def _migrate_to_new_unique_id(hass: HomeAssistant, dev_id, channel) -> None:
-    """Migrate old unique ids to new unique ids."""
-    old_unique_id = f"{combine_hex(dev_id)}"
+    entities = [
+        EnOceanLearnSwitch(dongle),
+    ]
 
-    ent_reg = er.async_get(hass)
-    entity_id = ent_reg.async_get_entity_id(Platform.SWITCH, DOMAIN, old_unique_id)
+    async_add_entities(entities)
 
-    if entity_id is not None:
-        new_unique_id = generate_unique_id(dev_id, channel)
-        try:
-            ent_reg.async_update_entity(entity_id, new_unique_id=new_unique_id)
-        except ValueError:
-            LOGGER.warning(
-                "Skip migration of id [%s] to [%s] because it already exists",
-                old_unique_id,
-                new_unique_id,
+    # Register listener to add switch entities discovered via EEP using shared factory
+    async def _add_switches_from_eep(
+        device_id, entities_list, rorg, rorg_func, rorg_type
+    ):
+        """Add switch entities for a discovered device from EEP profile."""
+
+        def _kwargs_factory(
+            ent,
+            device_id,
+            device_id_hex,
+            device_name,
+            rorg_int,
+            func_int,
+            type_int,
+            description,
+        ):
+            # Use channel/index from offset if available as fallback
+            channel = (
+                ent.get("offset")
+                if isinstance(ent, dict)
+                else getattr(ent, "offset", None)
             )
-        else:
-            LOGGER.debug(
-                "Migrating unique_id from [%s] to [%s]",
-                old_unique_id,
-                new_unique_id,
-            )
+            if channel is None:
+                return None
+            try:
+                return {"channel": int(channel)}
+            except (TypeError, ValueError):
+                return None
+
+        await async_create_entities_from_eep(
+            hass,
+            config_entry,
+            device_id,
+            entities_list,
+            rorg,
+            rorg_func,
+            rorg_type,
+            platform_type="switch",
+            entity_class=DynamicEnOceanSwitch,
+            async_add_entities=async_add_entities,
+            entity_kwargs_factory=_kwargs_factory,
+        )
+
+    config_entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_ADD_ENTITIES, _add_switches_from_eep)
+    )
 
 
 async def async_setup_platform(
@@ -72,9 +106,17 @@ async def async_setup_platform(
     channel: int = config[CONF_CHANNEL]
     dev_id: list[int] = config[CONF_ID]
     dev_name: str = config[CONF_NAME]
-
-    _migrate_to_new_unique_id(hass, dev_id, channel)
-    async_add_entities([EnOceanSwitch(dev_id, dev_name, channel)])
+    async_add_entities(
+        [
+            EnOceanSwitch(
+                dev_id,
+                data_field=dev_name,
+                attr_name=dev_name,
+                dev_name=None,
+                channel=channel,
+            )
+        ]
+    )
 
 
 class EnOceanSwitch(EnOceanEntity, SwitchEntity):
@@ -82,12 +124,26 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
 
     _attr_is_on = False
 
-    def __init__(self, dev_id: list[int], dev_name: str, channel: int) -> None:
+    def __init__(
+        self,
+        dev_id: list[int],
+        data_field: str,
+        attr_name: str | None = None,
+        dev_name: str | None = None,
+        channel: int | None = None,
+    ) -> None:
         """Initialize the EnOcean switch device."""
-        super().__init__(dev_id)
+        EnOceanEntity.__init__(
+            self,
+            dev_id,
+            data_field=data_field,
+            attr_name=attr_name,
+            dev_name=dev_name,
+            dev_class=None,
+        )
         self._light = None
         self.channel = channel
-        self._attr_unique_id = generate_unique_id(dev_id, channel)
+        self._attr_unique_id = f"{format_device_id_hex_underscore(dev_id)}-{channel}"
         self._attr_name = dev_name
 
     def turn_on(self, **kwargs: Any) -> None:
@@ -96,7 +152,17 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
         optional.extend(self.dev_id)
         optional.extend([0xFF, 0x00])
         self.send_command(
-            data=[0xD2, 0x01, self.channel & 0xFF, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00],
+            data=[
+                0xD2,
+                0x01,
+                (self.channel or 0) & 0xFF,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+            ],
             optional=optional,
             packet_type=0x01,
         )
@@ -108,7 +174,17 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
         optional.extend(self.dev_id)
         optional.extend([0xFF, 0x00])
         self.send_command(
-            data=[0xD2, 0x01, self.channel & 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            data=[
+                0xD2,
+                0x01,
+                (self.channel or 0) & 0xFF,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+            ],
             optional=optional,
             packet_type=0x01,
         )
@@ -135,3 +211,127 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
                 if channel == self.channel:
                     self._attr_is_on = output > 0
                     self.schedule_update_ha_state()
+
+
+class DynamicEnOceanSwitch(DynamicEnoceanEntity, EnOceanSwitch):
+    """Dynamic switch that uses EEP parser/fields when available."""
+
+    def __init__(
+        self,
+        dev_id: list[int],
+        rorg: int,
+        rorg_func: int,
+        rorg_type: int,
+        data_field: str,
+        attr_name: str | None = None,
+        dev_name: str | None = None,
+        channel: int | None = None,
+        device_class: str | None = None,
+        fields: EEPEntityDef | None = None,
+        command: int | None = None,
+    ) -> None:
+        """Initialize the dynamic EnOcean switch device."""
+        # Initialize dynamic base (parser/command/fields) then EnOceanSwitch
+        DynamicEnoceanEntity.__init__(
+            self,
+            dev_id,
+            data_field=data_field,
+            rorg=rorg,
+            rorg_func=rorg_func,
+            rorg_type=rorg_type,
+            dev_name=dev_name,
+            dev_class=device_class,
+            command=command,
+            fields=fields,
+        )
+        EnOceanSwitch.__init__(
+            self,
+            dev_id,
+            data_field=data_field,
+            attr_name=attr_name,
+            dev_name=dev_name,
+            channel=channel,
+        )
+
+    def value_changed(self, packet):
+        """Prefer parsed values via parser/fields, fallback to base implementation."""
+        if not packet.data or len(packet.data) < 2:
+            return
+
+        # Ensure packet matches configured command
+        if not self._packet_matches_command(packet):
+            return
+
+        try:
+            parsed = self._parse_packet(packet)
+            if parsed and self._fields:
+                # Try to extract channel and output fields commonly used
+                ch = parsed.get("IO") or parsed.get("CH") or parsed.get("IO_NUM")
+                out = parsed.get("OV") or parsed.get("OUT") or parsed.get("OUTPUT")
+                if isinstance(ch, dict):
+                    ch = ch.get("raw_value") or ch.get("value")
+                if isinstance(out, dict):
+                    out = out.get("raw_value") or out.get("value")
+                if ch is not None and out is not None:
+                    try:
+                        if int(ch) == int(self.channel):
+                            self._attr_is_on = int(out) > 0
+                            self.schedule_update_ha_state()
+                            return
+                    except (ValueError, TypeError):
+                        pass
+        except (ValueError, TypeError, KeyError) as err:
+            LOGGER.debug(
+                "Parser failed for dynamic switch %s: %s", self._attr_unique_id, err
+            )
+
+        # Fallback to original logic
+        super().value_changed(packet)
+
+
+class EnOceanLearnSwitch(SwitchEntity):
+    """Representation of an EnOcean learn mode switch."""
+
+    _attr_has_entity_name = True
+    _attr_is_on = False
+
+    def __init__(self, dongle) -> None:
+        """Initialize the learn mode switch."""
+        self._dongle = dongle
+        self._attr_unique_id = f"{dongle.identifier}-learn"
+        self._attr_name = "Learning mode"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info for the dongle."""
+        return {
+            "identifiers": {(DOMAIN, self._dongle.identifier)},
+            "name": f"EnOcean Dongle ({self._dongle.identifier})",
+            "manufacturer": "EnOcean",
+        }
+
+    async def async_added_to_hass(self) -> None:
+        """Register callback for learning mode changes."""
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_LEARNING_MODE_CHANGED,
+                self._learning_mode_changed_callback,
+            )
+        )
+        # Set initial state
+        self._attr_is_on = self._dongle.learning_mode
+        self.async_write_ha_state()
+
+    async def _learning_mode_changed_callback(self, data: dict) -> None:
+        """Handle learning mode changes."""
+        self._attr_is_on = data.get("enabled", False)
+        self.async_write_ha_state()
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn on learning mode."""
+        await self._dongle.async_start_learning()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn off learning mode."""
+        await self._dongle.async_stop_learning()

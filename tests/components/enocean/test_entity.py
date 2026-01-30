@@ -1,0 +1,109 @@
+"""Unit tests for homeassistant.components.enocean.entity module."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from homeassistant.components.enocean import entity as eno_entity
+from homeassistant.core import HomeAssistant
+
+
+def test_format_helpers() -> None:
+    """Test formatting helper functions."""
+    assert eno_entity.format_device_id_hex([0x01, 0x02, 0x0A, 0xFF]) == "01:02:0a:ff"
+    assert (
+        eno_entity.format_device_id_hex_underscore([0x01, 0x02, 0x0A, 0xFF])
+        == "01_02_0a_ff"
+    )
+
+
+def test_message_received_callback_calls_value_changed() -> None:
+    """Test that message received callback invokes value_changed."""
+
+    class TestEntity(eno_entity.EnOceanEntity):
+        """Test entity class."""
+
+        def __init__(self) -> None:
+            """Initialize test entity."""
+            super().__init__([0x01, 0x02, 0x03, 0x04], data_field="field")
+            self.called = False
+
+        def value_changed(self, _packet) -> None:
+            """Record that value changed was called."""
+            self.called = True
+
+    e = TestEntity()
+    # Create a fake packet with matching sender_int
+    sender_int = int.from_bytes(bytes([0x01, 0x02, 0x03, 0x04]), "big")
+    pkt = SimpleNamespace(sender_int=sender_int)
+
+    e._message_received_callback(pkt)
+    assert e.called
+
+
+def test_message_received_callback_ignores_other_senders() -> None:
+    """Test that message callback ignores packets from other senders."""
+
+    class TestEntity(eno_entity.EnOceanEntity):
+        """Test entity class."""
+
+        def __init__(self) -> None:
+            """Initialize test entity."""
+            super().__init__([0x01, 0x02, 0x03, 0x04], data_field="field")
+            self.called = False
+
+        def value_changed(self, _packet) -> None:
+            """Record that value changed was called."""
+            self.called = True
+
+    e = TestEntity()
+    pkt = SimpleNamespace(sender_int=0xDEADBEEF)
+    e._message_received_callback(pkt)
+    assert not e.called
+
+
+def test_send_command_dispatches_packet(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that send_command dispatches a packet."""
+    sent = []
+
+    class FakePacket:
+        def __init__(self, packet_type, data=None, optional=None) -> None:
+            self.packet_type = packet_type
+            self.data = data
+            self.optional = optional
+
+    def fake_dispatcher_send(hass: HomeAssistant, signal, packet) -> None:
+        sent.append((hass, signal, packet))
+
+    monkeypatch.setattr(eno_entity, "Packet", FakePacket)
+    monkeypatch.setattr(eno_entity, "dispatcher_send", fake_dispatcher_send)
+
+    e = eno_entity.EnOceanEntity([0x01, 0x02, 0x03, 0x04], data_field="f")
+    # hass can be any object; dispatcher_send receives it and we capture it
+    e.hass = "hass-instance"
+    e.send_command([1, 2, 3], [4, 5], 0x01)
+
+    assert len(sent) == 1
+    hass_arg, signal_arg, pkt = sent[0]
+    assert hass_arg == "hass-instance"
+    assert signal_arg is not None  # Signal should be present
+    assert pkt.packet_type == 0x01
+    assert pkt.data == [1, 2, 3]
+
+
+def test_packet_matches_command() -> None:
+    """Test that _packet_matches_command correctly checks the command field."""
+    # Create a DynamicEnoceanEntity instance without invoking its __init__
+    # because platform constructors may differ; we only need _packet_matches_command
+    d = object.__new__(eno_entity.DynamicEnoceanEntity)
+    d._command = 3
+
+    # data[1] should encode command in high nibble: (3 << 4) | low_nibble
+    pkt = SimpleNamespace(data=bytes([0x00, (3 << 4) | 0x0F]))
+    assert eno_entity.DynamicEnoceanEntity._packet_matches_command(d, pkt)
+
+    # too short data -> False
+    pkt_short = SimpleNamespace(data=bytes([0x00]))
+    assert not eno_entity.DynamicEnoceanEntity._packet_matches_command(d, pkt_short)

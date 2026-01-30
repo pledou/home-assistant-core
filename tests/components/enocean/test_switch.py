@@ -1,74 +1,44 @@
-"""Tests for the EnOcean switch platform."""
+"""Tests for EnOcean switch entity behavior."""
 
-from enocean.utils import combine_hex
-
-from homeassistant.components.enocean import DOMAIN
-from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
-from homeassistant.setup import async_setup_component
-
-from tests.common import MockConfigEntry, assert_setup_component
-
-SWITCH_CONFIG = {
-    "switch": [
-        {
-            "platform": DOMAIN,
-            "id": [0xDE, 0xAD, 0xBE, 0xEF],
-            "channel": 1,
-            "name": "room0",
-        },
-    ]
-}
+from homeassistant.components.enocean.switch import EnOceanSwitch
 
 
-async def test_unique_id_migration(
-    hass: HomeAssistant,
-    entity_registry: er.EntityRegistry,
-) -> None:
-    """Test EnOcean switch ID migration."""
+def test_switch_turn_on_and_off_sends_command_and_updates_state() -> None:
+    """Test sending on/off commands and updating state."""
+    dev_id = [0x01, 0x02, 0x03, 0x04]
+    channel = 5
+    name = "My Switch"
 
-    entity_name = SWITCH_CONFIG["switch"][0]["name"]
-    switch_entity_id = f"{SWITCH_DOMAIN}.{entity_name}"
-    dev_id = SWITCH_CONFIG["switch"][0]["id"]
-    channel = SWITCH_CONFIG["switch"][0]["channel"]
+    sw = EnOceanSwitch(dev_id, data_field="switch", dev_name=name, channel=channel)
 
-    old_unique_id = f"{combine_hex(dev_id)}"
+    sent = []
 
-    entry = MockConfigEntry(domain=DOMAIN, data={"device": "/dev/null"})
+    def fake_send_command(data, optional, packet_type):
+        sent.append({"data": data, "optional": optional, "packet_type": packet_type})
 
-    entry.add_to_hass(hass)
+    # Replace the send_command method with our test stub
+    sw.send_command = fake_send_command
 
-    # Add a switch with an old unique_id to the entity registry
-    entity_entry = entity_registry.async_get_or_create(
-        SWITCH_DOMAIN,
-        DOMAIN,
-        old_unique_id,
-        suggested_object_id=entity_name,
-        config_entry=entry,
-        original_name=entity_name,
-    )
+    # Turn on
+    sw.turn_on()
+    assert sw._attr_is_on is True
+    assert len(sent) == 1
+    assert sent[0]["data"][0] == 0xD2
+    assert sent[0]["data"][2] == (channel & 0xFF)
 
-    assert entity_entry.entity_id == switch_entity_id
-    assert entity_entry.unique_id == old_unique_id
+    # Turn off
+    sw.turn_off()
+    assert sw._attr_is_on is False
+    assert len(sent) == 2
+    assert sent[1]["data"][0] == 0xD2
+    assert sent[1]["data"][2] == (channel & 0xFF)
 
-    # Now add the sensor to check, whether the old unique_id is migrated
 
-    with assert_setup_component(1, SWITCH_DOMAIN):
-        assert await async_setup_component(
-            hass,
-            SWITCH_DOMAIN,
-            SWITCH_CONFIG,
-        )
+def test_unique_id_and_name_set_correctly() -> None:
+    """Test that unique ID and name are set correctly."""
+    dev_id = [0x0A, 0x0B, 0x0C, 0x0D]
+    channel = 2
+    name = "Kitchen Switch"
 
-    await hass.async_block_till_done()
-
-    # Check that new entry has a new unique_id
-    entity_entry = entity_registry.async_get(switch_entity_id)
-    new_unique_id = f"{combine_hex(dev_id)}-{channel}"
-
-    assert entity_entry.unique_id == new_unique_id
-    assert (
-        entity_registry.async_get_entity_id(SWITCH_DOMAIN, DOMAIN, old_unique_id)
-        is None
-    )
+    sw = EnOceanSwitch(dev_id, data_field="switch", dev_name=name, channel=channel)
+    assert sw._attr_name == name

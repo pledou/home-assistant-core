@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from enocean.utils import combine_hex
+import logging
+
+from enocean.protocol.eep_metadata import get_field_value_with_enum
 import voluptuous as vol
 
 from homeassistant.components.binary_sensor import (
@@ -11,13 +13,20 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_DEVICE_CLASS, CONF_ID, CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .entity import EnOceanEntity
+from . import SIGNAL_ADD_ENTITIES
+from .const import LOGGER
+from .eep_devices import EEPEntityDef
+from .entity import DynamicEnoceanEntity, EnOceanEntity, async_create_entities_from_eep
+
+_LOGGER = logging.getLogger(__name__)
+
 
 DEFAULT_NAME = "EnOcean binary sensor"
 DEPENDENCIES = ["enocean"]
@@ -32,24 +41,55 @@ PLATFORM_SCHEMA = BINARY_SENSOR_PLATFORM_SCHEMA.extend(
 )
 
 
-def setup_platform(
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
-    add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
+    config_entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up the Binary Sensor platform for EnOcean."""
-    dev_id: list[int] = config[CONF_ID]
-    dev_name: str = config[CONF_NAME]
-    device_class: BinarySensorDeviceClass | None = config.get(CONF_DEVICE_CLASS)
+    """Set up EnOcean binary sensor entities."""
+    entities: list[BinarySensorEntity] = []
 
-    add_entities([EnOceanBinarySensor(dev_id, dev_name, device_class)])
+    # Device-specific binary sensors are created dynamically from discovery
+    # events.
+
+    if entities:
+        async_add_entities(entities)
+
+    # Register listener for EEP-discovered entities
+    async def _add_binary_from_eep(
+        device_id: list[int],
+        device_id_hex: str,
+        entities_list: list[EEPEntityDef],
+        rorg: int,
+        func: int,
+        type_: int,
+    ):
+        """Add binary sensor entities for a discovered device from EEP profile."""
+
+        await async_create_entities_from_eep(
+            hass,
+            config_entry,
+            device_id,
+            device_id_hex,
+            entities_list,
+            rorg,
+            func,
+            type_,
+            platform_type="binary_sensor",
+            entity_class=DynamicEnOceanBinarySensor,
+            async_add_entities=async_add_entities,
+            entity_kwargs_factory=None,
+        )
+
+    config_entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_ADD_ENTITIES, _add_binary_from_eep)
+    )
 
 
 class EnOceanBinarySensor(EnOceanEntity, BinarySensorEntity):
-    """Representation of EnOcean binary sensors such as wall switches.
+    """Representation of an EnOcean binary sensor device.
 
-    Supported EEPs (EnOcean Equipment Profiles):
+    EEPs (EnOcean Equipment Profiles):
     - F6-02-01 (Light and Blind Control - Application Style 2)
     - F6-02-02 (Light and Blind Control - Application Style 1)
     """
@@ -58,15 +98,22 @@ class EnOceanBinarySensor(EnOceanEntity, BinarySensorEntity):
         self,
         dev_id: list[int],
         dev_name: str,
+        data_field: str,
         device_class: BinarySensorDeviceClass | None,
+        entity_name: str | None = None,
     ) -> None:
         """Initialize the EnOcean binary sensor."""
-        super().__init__(dev_id)
+        BinarySensorEntity.__init__(self)
+        EnOceanEntity.__init__(
+            self,
+            dev_id=dev_id,
+            data_field=data_field,
+            attr_name=entity_name,
+            dev_name=dev_name,
+        )
         self._attr_device_class = device_class
         self.which = -1
         self.onoff = -1
-        self._attr_unique_id = f"{combine_hex(dev_id)}-{device_class}"
-        self._attr_name = dev_name
 
     def value_changed(self, packet):
         """Fire an event with the data that have changed.
@@ -118,3 +165,89 @@ class EnOceanBinarySensor(EnOceanEntity, BinarySensorEntity):
                 "onoff": self.onoff,
             },
         )
+
+
+class DynamicEnOceanBinarySensor(DynamicEnoceanEntity, BinarySensorEntity):
+    """Generic dynamic binary sensor that parses EEP profiles using Parser.
+
+    This binary sensor can be configured per-instance with explicit EEP
+    identifiers (rorg/func/type) and an optional fields mapping.
+    """
+
+    def __init__(
+        self,
+        dev_id: list[int],
+        dev_name: str,
+        rorg: int,
+        rorg_func: int,
+        rorg_type: int,
+        data_field: str,
+        device_class: BinarySensorDeviceClass | None = None,
+        fields: EEPEntityDef | None = None,
+        command: int | None = None,
+    ) -> None:
+        """Initialize the dynamic EnOcean binary sensor."""
+        # Initialize shared dynamic behaviour then set device-specific attrs
+        DynamicEnoceanEntity.__init__(
+            self,
+            dev_id=dev_id,
+            dev_name=dev_name,
+            data_field=data_field,
+            rorg=rorg,
+            rorg_func=rorg_func,
+            rorg_type=rorg_type,
+            command=command,
+            fields=fields,
+        )
+        BinarySensorEntity.__init__(self)
+        # Normalize device class enum
+        if isinstance(device_class, str):
+            try:
+                device_class_enum = BinarySensorDeviceClass(device_class)
+            except ValueError:
+                device_class_enum = None
+        else:
+            device_class_enum = device_class
+        self._attr_device_class = device_class_enum
+
+    def value_changed(self, packet) -> None:
+        """Update the internal state when a packet arrives."""
+        if not packet.data or len(packet.data) < 2:
+            return
+        # Use shared helpers for parser initialization and command matching
+        if not self._packet_matches_command(packet):
+            return
+
+        try:
+            parsed = self._parse_packet(packet)
+            if not parsed or not self._data_field:
+                return
+
+            if self._fields:
+                value = get_field_value_with_enum(
+                    parsed, self._data_field, self._fields
+                )
+            else:
+                value = parsed.get(self._data_field)
+
+            LOGGER.debug(
+                "Dynamic binary sensor %s: CMD=%s, Field=%s, Value=%s",
+                self._attr_name,
+                parsed.get("CMD"),
+                self._data_field,
+                value,
+            )
+
+            if value is not None:
+                # Convert to boolean
+                try:
+                    self._attr_is_on = bool(value)
+                except (TypeError, ValueError):
+                    self._attr_is_on = bool(int(value))
+                self.schedule_update_ha_state()
+        except (ValueError, TypeError, KeyError, OSError) as err:
+            LOGGER.error(
+                "Error parsing dynamic binary sensor packet for %s: %s",
+                self._attr_name,
+                err,
+            )

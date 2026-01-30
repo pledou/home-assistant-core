@@ -6,17 +6,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import struct
 
-from enocean.protocol.ventilairsec import (  # pylint: disable=no-name-in-module
-    VentilairsecParser,
-)
-from enocean.protocol.ventilairsec_eep import (  # pylint: disable=no-name-in-module
-    get_field_value_with_enum,
-)
-from enocean.utils import combine_hex
+from enocean.protocol.eep_metadata import get_field_value_with_enum
 import voluptuous as vol
 
 from homeassistant.components.sensor import (
     PLATFORM_SCHEMA as SENSOR_PLATFORM_SCHEMA,
+    ConfigEntry,
     RestoreSensor,
     SensorDeviceClass,
     SensorEntityDescription,
@@ -35,17 +30,20 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from . import SIGNAL_ADD_ENTITIES
 from .const import LOGGER
-from .entity import EnOceanEntity
+from .entity import DynamicEnoceanEntity, EnOceanEntity, async_create_entities_from_eep
+from .types import EEPEntityDef
 
 CONF_MAX_TEMP = "max_temp"
 CONF_MIN_TEMP = "min_temp"
 CONF_RANGE_FROM = "range_from"
 CONF_RANGE_TO = "range_to"
 CONF_DATA_FIELD = "data_field"
+CONF_AUTO_DISCOVER = "auto_discover"
 
 DEFAULT_NAME = "EnOcean sensor"
 
@@ -53,14 +51,13 @@ SENSOR_TYPE_HUMIDITY = "humidity"
 SENSOR_TYPE_POWER = "powersensor"
 SENSOR_TYPE_TEMPERATURE = "temperature"
 SENSOR_TYPE_WINDOWHANDLE = "windowhandle"
-SENSOR_TYPE_VENTILAIRSEC = "ventilairsec"
 
 
 @dataclass(frozen=True, kw_only=True)
 class EnOceanSensorEntityDescription(SensorEntityDescription):
     """Describes EnOcean sensor entity."""
 
-    unique_id: Callable[[list[int]], str | None]
+    unique_id: Callable[[str], str | None]
 
 
 SENSOR_DESC_TEMPERATURE = EnOceanSensorEntityDescription(
@@ -69,7 +66,7 @@ SENSOR_DESC_TEMPERATURE = EnOceanSensorEntityDescription(
     native_unit_of_measurement=UnitOfTemperature.CELSIUS,
     device_class=SensorDeviceClass.TEMPERATURE,
     state_class=SensorStateClass.MEASUREMENT,
-    unique_id=lambda dev_id: f"{combine_hex(dev_id)}-{SENSOR_TYPE_TEMPERATURE}",
+    unique_id=lambda dev_id_hex: f"{dev_id_hex}-{SENSOR_TYPE_TEMPERATURE}",
 )
 
 SENSOR_DESC_HUMIDITY = EnOceanSensorEntityDescription(
@@ -78,7 +75,7 @@ SENSOR_DESC_HUMIDITY = EnOceanSensorEntityDescription(
     native_unit_of_measurement=PERCENTAGE,
     device_class=SensorDeviceClass.HUMIDITY,
     state_class=SensorStateClass.MEASUREMENT,
-    unique_id=lambda dev_id: f"{combine_hex(dev_id)}-{SENSOR_TYPE_HUMIDITY}",
+    unique_id=lambda dev_id_hex: f"{dev_id_hex}-{SENSOR_TYPE_HUMIDITY}",
 )
 
 SENSOR_DESC_POWER = EnOceanSensorEntityDescription(
@@ -87,14 +84,14 @@ SENSOR_DESC_POWER = EnOceanSensorEntityDescription(
     native_unit_of_measurement=UnitOfPower.WATT,
     device_class=SensorDeviceClass.POWER,
     state_class=SensorStateClass.MEASUREMENT,
-    unique_id=lambda dev_id: f"{combine_hex(dev_id)}-{SENSOR_TYPE_POWER}",
+    unique_id=lambda dev_id_hex: f"{dev_id_hex}-{SENSOR_TYPE_POWER}",
 )
 
 SENSOR_DESC_WINDOWHANDLE = EnOceanSensorEntityDescription(
     key=SENSOR_TYPE_WINDOWHANDLE,
     name="WindowHandle",
     translation_key="window_handle",
-    unique_id=lambda dev_id: f"{combine_hex(dev_id)}-{SENSOR_TYPE_WINDOWHANDLE}",
+    unique_id=lambda dev_id_hex: f"{dev_id_hex}-{SENSOR_TYPE_WINDOWHANDLE}",
 )
 
 
@@ -109,65 +106,48 @@ PLATFORM_SCHEMA = SENSOR_PLATFORM_SCHEMA.extend(
         vol.Optional(CONF_RANGE_TO, default=0): cv.positive_int,
         vol.Optional(CONF_UNIT_OF_MEASUREMENT): cv.string,
         vol.Optional(CONF_DATA_FIELD): cv.string,
+        vol.Optional(CONF_AUTO_DISCOVER, default=False): cv.boolean,
     }
 )
 
 
-def setup_platform(
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
-    add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
+    config_entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up an EnOcean sensor device."""
-    dev_id: list[int] = config[CONF_ID]
-    dev_name: str = config[CONF_NAME]
-    sensor_type: str = config[CONF_DEVICE_CLASS]
-
+    """Set up EnOcean sensor entities."""
     entities: list[EnOceanSensor] = []
-    if sensor_type == SENSOR_TYPE_TEMPERATURE:
-        temp_min: int = config[CONF_MIN_TEMP]
-        temp_max: int = config[CONF_MAX_TEMP]
-        range_from: int = config[CONF_RANGE_FROM]
-        range_to: int = config[CONF_RANGE_TO]
-        entities = [
-            EnOceanTemperatureSensor(
-                dev_id,
-                dev_name,
-                SENSOR_DESC_TEMPERATURE,
-                scale_min=temp_min,
-                scale_max=temp_max,
-                range_from=range_from,
-                range_to=range_to,
-            )
-        ]
 
-    elif sensor_type == SENSOR_TYPE_HUMIDITY:
-        entities = [EnOceanHumiditySensor(dev_id, dev_name, SENSOR_DESC_HUMIDITY)]
+    # Device-specific sensors are created dynamically from discovery events.
 
-    elif sensor_type == SENSOR_TYPE_POWER:
-        entities = [EnOceanPowerSensor(dev_id, dev_name, SENSOR_DESC_POWER)]
+    if entities:
+        async_add_entities(entities)
 
-    elif sensor_type == SENSOR_TYPE_WINDOWHANDLE:
-        entities = [EnOceanWindowHandle(dev_id, dev_name, SENSOR_DESC_WINDOWHANDLE)]
+    # Register listener for EEP-discovered entities
+    async def _add_entities_from_eep(
+        device_id, device_id_hex, entities_list, rorg, func, type_
+    ):
+        """Add sensor entities for a discovered device from EEP profile."""
 
-    elif sensor_type == SENSOR_TYPE_VENTILAIRSEC:
-        # Ventilairsec MSC telegram sensor
-        data_field = config.get(CONF_DATA_FIELD)
-        unit = config.get(CONF_UNIT_OF_MEASUREMENT)
-        device_class = config.get(CONF_DEVICE_CLASS)
+        await async_create_entities_from_eep(
+            hass,
+            config_entry,
+            device_id,
+            device_id_hex,
+            entities_list,
+            rorg,
+            func,
+            type_,
+            platform_type="sensor",
+            entity_class=DynamicEnOceanSensor,
+            async_add_entities=async_add_entities,
+        )
 
-        entities = [
-            VentilairsecSensor(
-                dev_id,
-                dev_name,
-                data_field=data_field,
-                unit=unit,
-                device_class=device_class,
-            )
-        ]
-
-    add_entities(entities)
+    # Keep registration so it is cleaned up on unload
+    config_entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_ADD_ENTITIES, _add_entities_from_eep)
+    )
 
 
 class EnOceanSensor(EnOceanEntity, RestoreSensor):
@@ -180,51 +160,34 @@ class EnOceanSensor(EnOceanEntity, RestoreSensor):
         description: EnOceanSensorEntityDescription,
     ) -> None:
         """Initialize the EnOcean sensor device."""
-        super().__init__(dev_id)
-        self.entity_description = description
-        self._attr_name = f"{description.name} {dev_name}"
-        self._attr_unique_id = description.unique_id(dev_id)
+        # Convert UNDEFINED to None for attr_name
+        attr_name_value: str | None = None
+        if (
+            description.name
+            and description.name
+            is not SensorEntityDescription.__dataclass_fields__["name"].default
+        ):
+            attr_name_value = str(description.name)
+        super().__init__(
+            dev_id,
+            data_field=description.key,
+            attr_name=attr_name_value,
+            dev_name=dev_name,
+        )
 
     async def async_added_to_hass(self) -> None:
         """Call when entity about to be added to hass."""
         # If not None, we got an initial value.
         await super().async_added_to_hass()
-        if self._attr_native_value is not None:
-            return
-
         if (sensor_data := await self.async_get_last_sensor_data()) is not None:
             self._attr_native_value = sensor_data.native_value
-
-    def value_changed(self, packet):
-        """Update the internal state of the sensor."""
-
-
-class EnOceanPowerSensor(EnOceanSensor):
-    """Representation of an EnOcean power sensor.
-
-    EEPs (EnOcean Equipment Profiles):
-    - A5-12-01 (Automated Meter Reading, Electricity)
-    """
-
-    def value_changed(self, packet):
-        """Update the internal state of the sensor."""
-        if packet.rorg != 0xA5:
-            return
-        packet.parse_eep(0x12, 0x01)
-        if packet.parsed["DT"]["raw_value"] == 1:
-            # this packet reports the current value
-            raw_val = packet.parsed["MR"]["raw_value"]
-            divisor = packet.parsed["DIV"]["raw_value"]
-            self._attr_native_value = raw_val / (10**divisor)
-            self.schedule_update_ha_state()
 
 
 class EnOceanTemperatureSensor(EnOceanSensor):
     """Representation of an EnOcean temperature sensor device.
 
     EEPs (EnOcean Equipment Profiles):
-    - A5-02-01 to A5-02-1B All 8 Bit Temperature Sensors of A5-02
-    - A5-10-01 to A5-10-14 (Room Operating Panels)
+    - A5-02-01 to A5-02-1B (Delta offset are not supported)
     - A5-04-01 (Temp. and Humidity Sensor, Range 0°C to +40°C and 0% to 100%)
     - A5-04-02 (Temp. and Humidity Sensor, Range -20°C to +60°C and 0% to 100%)
     - A5-10-10 (Temp. and Humidity Sensor and Set Point)
@@ -240,6 +203,7 @@ class EnOceanTemperatureSensor(EnOceanSensor):
     def __init__(
         self,
         dev_id: list[int],
+        dev_id_hex: str,
         dev_name: str,
         description: EnOceanSensorEntityDescription,
         *,
@@ -307,75 +271,96 @@ class EnOceanWindowHandle(EnOceanSensor):
         self.schedule_update_ha_state()
 
 
-class VentilairsecSensor(EnOceanSensor):
-    """Representation of a Ventilairsec EnOcean sensor device.
+class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
+    """Generic dynamic sensor that parses EEP profiles using the generic Parser.
 
-    EEPs (EnOcean Equipment Profiles):
-    - 0xD1079 (MSC Telegram Ventilairsec)
-
-    This sensor supports the Ventilairsec ventilation system with multiple
-    temperature, humidity, and status sensors. It uses the enocean library's
-    VentilairsecParser to decode MSC telegrams automatically, eliminating
-    the need for redundant RORG/FUNC/TYPE/command parameters.
+    This sensor can be configured per-instance with an explicit EEP profile
+    (rorg/func/type) and an optional fields mapping. If no per-instance
+    profile is provided it will fall back to the preloaded Ventilairsec
+    parser/fields when available.
     """
 
     def __init__(
         self,
         dev_id: list[int],
+        dev_id_hex: str,
         dev_name: str,
-        *,
+        rorg: int,
+        rorg_func: int,
+        rorg_type: int,
         data_field: str | None = None,
-        unit: str | None = None,
         device_class: SensorDeviceClass | str | None = None,
+        fields: EEPEntityDef | None = None,
+        command: int | None = None,
     ) -> None:
-        """Initialize the Ventilairsec sensor device."""
-        # Convert string device class to enum if needed
-        device_class_enum: SensorDeviceClass | None = None
-        if isinstance(device_class, str):
-            try:
-                device_class_enum = SensorDeviceClass(device_class)
-            except ValueError:
-                device_class_enum = None
-        elif isinstance(device_class, SensorDeviceClass):
-            device_class_enum = device_class
+        """Initialize the dynamic EnOcean sensor.
 
-        # Create a custom description for this sensor
-        description = EnOceanSensorEntityDescription(
-            key=f"ventilairsec_{data_field or 'sensor'}",
-            name=dev_name,
-            native_unit_of_measurement=unit,
-            device_class=device_class_enum,
-            state_class=SensorStateClass.MEASUREMENT if unit else None,
-            unique_id=lambda dev_id: f"{combine_hex(dev_id)}-{data_field or 'sensor'}",
+        Args:
+            dev_id: List of device ID bytes
+            dev_id_hex: Hex string representation of device ID
+            dev_name: Human-readable device name
+            data_field: EEP field name to extract
+            device_class: Device class for the sensor
+            rorg/rorg_func/rorg_type: EEP identifiers for per-instance parsing
+            fields: Optional preloaded fields mapping (from load_eep_fields)
+            command: Command ID for this entity
+            description: Optional entity description
+        """
+        EnOceanSensor.__init__(
+            self,
+            dev_id=dev_id,
+            dev_name=dev_name,
+            description=EnOceanSensorEntityDescription(
+                key=data_field or "sensor",
+                name=dev_name,
+                unique_id=lambda dev_id_hex: f"{dev_id_hex}-{data_field or 'sensor'}",
+            ),
         )
-        super().__init__(dev_id, dev_name, description)
-        self._data_field = data_field
+
+        # Initialize shared dynamic behaviour
+        DynamicEnoceanEntity.__init__(
+            self,
+            dev_id,
+            data_field=data_field or "sensor",
+            rorg=rorg,
+            rorg_func=rorg_func,
+            rorg_type=rorg_type,
+            dev_name=dev_name,
+            command=command,
+            fields=fields,
+        )
+        # Set sensor-specific attributes
+        self._dev_id_hex = dev_id_hex
+        self._attr_name = f"{dev_name}"
+        if fields is not None and fields.unit:
+            self._unit = fields.unit
+        if device_class is not None:
+            self._attr_device_class = device_class  # type: ignore[assignment]
 
     def value_changed(self, packet):
-        """Update the internal state of the sensor.
-
-        Automatically parses Ventilairsec MSC telegram format using the
-        enocean library's VentilairsecParser. No manual RORG/FUNC/TYPE
-        specification required - it's handled transparently.
-        """
+        """Update the internal state of the sensor when a packet arrives."""
         if not packet.data or len(packet.data) < 2:
+            return
+        # Use shared helpers for parser initialization and command matching
+        if not self._packet_matches_command(packet):
             return
 
         try:
-            # Parse the raw packet data
-            parsed_data = VentilairsecParser.parse_packet(packet.data)
-
-            if not parsed_data or self._data_field not in parsed_data:
+            parsed = self._parse_packet(packet)
+            if not parsed or not self._data_field:
                 return
 
-            # Get the field value with enum mapping applied
-            value = get_field_value_with_enum(parsed_data, self._data_field)
-            cmd = parsed_data.get("CMD")
+            if self._fields:
+                value = get_field_value_with_enum(
+                    parsed, self._data_field, self._fields
+                )
+            else:
+                value = parsed.get(self._data_field)
 
             LOGGER.debug(
-                "Ventilairsec %s: CMD=%s, Field=%s, Value=%s",
+                "Dynamic sensor %s: CMD=%s, Field=%s, Value=%s",
                 self._attr_name,
-                cmd,
+                parsed.get("CMD"),
                 self._data_field,
                 value,
             )
@@ -383,17 +368,7 @@ class VentilairsecSensor(EnOceanSensor):
             if value is not None:
                 self._attr_native_value = value
                 self.schedule_update_ha_state()
-
-        except ImportError:
-            # Fallback: enocean library not available, use basic parsing
-            LOGGER.warning(
-                "EnOcean library's VentilairsecParser not available for %s",
-                self._attr_name,
-            )
-            return
         except (ValueError, KeyError, OSError, TypeError, struct.error) as err:
             LOGGER.error(
-                "Error parsing Ventilairsec packet for %s: %s",
-                self._attr_name,
-                err,
+                "Error parsing dynamic sensor packet for %s: %s", self._attr_name, err
             )

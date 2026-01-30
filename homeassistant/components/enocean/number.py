@@ -7,11 +7,12 @@ from enocean.protocol.eep_metadata import get_field_value_with_enum
 from homeassistant.components.number import RestoreNumber
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SIGNAL_ADD_ENTITIES
-from .const import DATA_ENOCEAN, ENOCEAN_DONGLE
+from .const import DATA_ENOCEAN, DOMAIN, ENOCEAN_DONGLE
 from .entity import DynamicEnoceanEntity, EnOceanEntity, async_create_entities_from_eep
 from .types import EEPEntityDef
 
@@ -204,7 +205,7 @@ class DynamicEnOceanNumber(DynamicEnoceanEntity, EnOceanNumber):
                 pass
 
 
-class EnOceanLearningDurationNumber(EnOceanNumber):
+class EnOceanLearningDurationNumber(RestoreNumber):
     """Representation of the EnOcean learning mode duration number."""
 
     _attr_has_entity_name = True
@@ -218,19 +219,18 @@ class EnOceanLearningDurationNumber(EnOceanNumber):
     def __init__(self, dongle) -> None:
         """Initialize the learning duration number."""
         self._dongle = dongle
-        EnOceanNumber.__init__(
-            self,
-            dev_id=dongle.identifier,
-            dev_name=f"EnOcean Dongle ({dongle.identifier})",
-            min_value=1,
-            max_value=10,
-            unit="minutes",
-            data_field="learning_duration",
-            attr_name="Learning duration",
-            dev_class=None,
-        )
+        super().__init__()
         self._attr_unique_id = f"{dongle.identifier}-learning-duration"
         self._attr_native_value = dongle.learning_duration
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info for the dongle."""
+        return {
+            "identifiers": {(DOMAIN, self._dongle.identifier)},
+            "name": f"EnOcean Dongle ({self._dongle.identifier})",
+            "manufacturer": "EnOcean",
+        }
 
     async def async_added_to_hass(self) -> None:
         """Restore the last known state."""

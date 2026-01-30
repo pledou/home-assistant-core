@@ -44,6 +44,7 @@ class EnOceanDongle:
         self._discovered_sensors: dict = {}  # Track discovered sensors by (parent_id, sensor_id)
         self._learning_task: asyncio.Task[None] | None = None
         self._learning_duration = 10  # Default 10 minutes
+        self.base_id: list[int] | None = None
 
     async def async_setup(self):
         """Finish the setup of the bridge and supported platforms."""
@@ -59,11 +60,11 @@ class EnOceanDongle:
 
     def _fetch_base_id(self):
         """Fetch base ID from the dongle (runs in executor)."""
-        base_id = self._communicator.base_id
-        if base_id:
+        self.base_id = self._communicator.base_id
+        if self.base_id:
             _LOGGER.debug(
                 "EnOcean Base ID: %s",
-                base_id.hex() if isinstance(base_id, bytes) else base_id,
+                self.base_id.hex() if isinstance(self.base_id, bytes) else self.base_id,
             )
         else:
             _LOGGER.warning("Could not retrieve EnOcean Base ID from dongle")

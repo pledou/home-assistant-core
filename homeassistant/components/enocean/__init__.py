@@ -18,7 +18,7 @@ from homeassistant.helpers.typing import ConfigType
 from .const import DATA_ENOCEAN, DOMAIN, ENOCEAN_DONGLE, PLATFORMS
 from .dongle import SIGNAL_DISCOVER_DEVICE, EnOceanDongle
 from .eep_devices import load_device_profile_from_packet
-from .entity import format_device_id_hex
+from .entity import format_device_id_hex, format_device_id_hex_underscore
 from .types import DiscoveryInfo, EepProfile
 
 # Signal sent when new entities should be added (after device discovery)
@@ -84,8 +84,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         # Narrow the TypedDict to a local variable so types are preserved
         eep_profile: EepProfile = discovery_info["eep_profile"]
         rorg = eep_profile["rorg"]
-        func = eep_profile["rorg_func"]
-        type_ = eep_profile["rorg_type"]
+        rorg_func = eep_profile["rorg_func"]
+        rorg_type = eep_profile["rorg_type"]
 
         device_registry = dr.async_get(hass)
         # Check if device already exists before creating
@@ -113,10 +113,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                     # internal telegrams mapping. Calling into the mapping is
                     # potentially file/CPU-bound, so run in the executor.
                     def _get_full_profile(
-                        eep, rorg: int, func: int, ptype: int
+                        eep, rorg: int, rorg_func: int, ptype: int
                     ) -> dict | None:
                         try:
-                            return eep.telegrams[rorg][func][ptype]
+                            return eep.telegrams[rorg][rorg_func][ptype]
                         except (
                             FileNotFoundError,
                             OSError,
@@ -127,14 +127,14 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                                 "Error getting eep profile for device %s rorg=0x%02x func=0x%02x type=0x%02x: %s",
                                 eep,
                                 rorg,
-                                func,
+                                rorg_func,
                                 ptype,
                                 err,
                             )
                             return None
 
                     profile = await hass.async_add_executor_job(
-                        _get_full_profile, _eep, rorg, func, type_
+                        _get_full_profile, _eep, rorg, rorg_func, rorg_type
                     )
 
                     # Fall back to the library's find_profile if direct lookup
@@ -142,7 +142,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                     # behaviour may require it).
                     if profile is None:
                         profile = await hass.async_add_executor_job(
-                            _eep.find_profile, None, rorg, func, type_
+                            _eep.find_profile, None, rorg, rorg_func, rorg_type
                         )
                 except (ValueError, TypeError, LookupError) as err:
                     _LOGGER.debug("EEP profile lookup failed: %s", err)
@@ -158,19 +158,19 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 else:
                     _LOGGER.warning(
                         "Device %s has unknown EEP profile (rorg=0x%02x func=0x%02x type=0x%02x), skipping integration",
-                        device_id_hex,
+                        format_device_id_hex(device_id),
                         rorg,
-                        func,
-                        type_,
+                        rorg_func,
+                        rorg_type,
                     )
                     return
 
             _LOGGER.info(
                 "Discovered EnOcean device: %s rorg=0x%02x, func=0x%02x type=0x%02x",
-                device_id_hex,
+                format_device_id_hex(device_id),
                 rorg,
-                func,
-                type_,
+                rorg_func,
+                rorg_type,
             )
 
             # Load and populate entities from the resolved EEP profile object
@@ -178,8 +178,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 load_device_profile_from_packet,
                 {
                     "rorg": rorg,
-                    "rorg_func": func,
-                    "rorg_type": type_,
+                    "rorg_func": rorg_func,
+                    "rorg_type": rorg_type,
                     "eep_profile": profile,
                 },
             )
@@ -189,37 +189,36 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
                 device_registry.async_get_or_create(
                     config_entry_id=config_entry.entry_id,
-                    identifiers={(DOMAIN, device_id_hex)},
-                    name=f"{DOMAIN} {device_id_hex}",
+                    identifiers={(DOMAIN, format_device_id_hex_underscore(device_id))},
+                    name=f"{DOMAIN} {format_device_id_hex(device_id)}",
                     manufacturer="EnOcean",
-                    model=f"0x{rorg:02x} (func=0x{(func or 0):02x}, type=0x{type_:02x})",
+                    model=f"0x{rorg:02x} (func=0x{(rorg_func or 0):02x}, type=0x{rorg_type:02x})",
                 )
 
                 _LOGGER.debug(
                     "Creating %d entities for device %s from EEP profile",
                     len(entities),
-                    device_id_hex,
+                    format_device_id_hex(device_id),
                 )
                 # Signal platforms to add the generated entities
-                # Pass device_id (list[int]) for entity creation, use device_id_hex for device registry
+                # Pass device_id (list[int]) for entity creation
                 async_dispatcher_send(
                     hass,
                     SIGNAL_ADD_ENTITIES,
                     device_id,
-                    device_id_hex,
                     entities,
                     rorg,
-                    func,
-                    type_,
+                    rorg_func,
+                    rorg_type,
                 )
             else:
                 # Signal platforms without entities if profile couldn't be loaded
                 _LOGGER.warning(
                     "No entities created for device %s as EEP profile %02x-%02x-%02x could not be loaded, device has not been integrated",
-                    device_id_hex,
+                    format_device_id_hex(device_id),
                     rorg,
-                    func,
-                    type_,
+                    rorg_func,
+                    rorg_type,
                 )
 
     # Register listener for device discovery signals

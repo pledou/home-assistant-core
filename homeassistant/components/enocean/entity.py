@@ -195,7 +195,6 @@ async def async_create_entities_from_eep(
     hass: HomeAssistant,
     config_entry,
     device_id: list[int],
-    device_id_hex: str,
     entities_list: list[EEPEntityDef] | None,
     rorg: int,
     rorg_func: int,
@@ -218,13 +217,12 @@ async def async_create_entities_from_eep(
         hass: Home Assistant instance
         config_entry: Config entry
         device_id: 4-byte device ID list
-        device_id_hex: Hex string representation of device ID (colon-separated)
         entities_list: List of EEPEntityDef objects
         rorg, func, type_: EEP profile identifiers
         platform_type: Entity platform ("sensor", "binary_sensor", etc.)
         entity_class: The entity class to instantiate
         async_add_entities: Callback to add entities
-        entity_kwargs_factory: Optional callable(ent, device_id, device_id_hex, device_name, rorg_int, func_int, type_int, description) -> dict of extra kwargs
+        entity_kwargs_factory: Optional callable(ent, device_id, device_name, rorg_int, func_int, type_int, description) -> dict of extra kwargs
     """
 
     if not entities_list:
@@ -232,12 +230,12 @@ async def async_create_entities_from_eep(
 
     device_registry = dr.async_get(hass)
     device_entry = device_registry.async_get_device(
-        identifiers={("enocean", device_id_hex)}
+        identifiers={("enocean", format_device_id_hex_underscore(device_id))}
     )
     if not device_entry or config_entry.entry_id not in device_entry.config_entries:
         return
 
-    device_name = device_entry.name or f"enocean {device_id_hex}"
+    device_name = device_entry.name or f"enocean {format_device_id_hex(device_id)}"
     new_entities = []
     entity_registry = er.async_get(hass)
 
@@ -260,14 +258,14 @@ async def async_create_entities_from_eep(
                     "%s entity %s for device %s already exists, skipping",
                     platform_type.capitalize(),
                     unique_id,
-                    device_id_hex,
+                    format_device_id_hex(device_id),
                 )
                 continue
 
             LOGGER.debug(
                 "Creating %s for device %s: data_field=%s, name=%s",
                 platform_type,
-                device_id_hex,
+                format_device_id_hex(device_id),
                 ent.data_field,
                 ent.name,
             )
@@ -304,7 +302,6 @@ async def async_create_entities_from_eep(
                 extra_kwargs = entity_kwargs_factory(
                     ent,
                     device_id,
-                    device_id_hex,
                     device_name,
                     rorg,
                     rorg_func,
@@ -318,7 +315,6 @@ async def async_create_entities_from_eep(
             new_entities.append(
                 entity_class(
                     device_id,
-                    device_id_hex,
                     device_name,
                     **entity_kwargs,
                 )

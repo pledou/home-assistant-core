@@ -37,7 +37,7 @@ async def async_setup_entry(
 
     # Register listener for EEP-discovered number entities using shared factory
     async def _add_numbers_from_eep(
-        device_id, device_id_hex, entities_list, rorg, func, type_
+        device_id, entities_list, rorg, rorg_func, rorg_type
     ):
         """Add number entities for a discovered device from EEP profile."""
         if not entities_list:
@@ -47,11 +47,10 @@ async def async_setup_entry(
             hass,
             config_entry,
             device_id,
-            device_id_hex,
             entities_list,
             rorg,
-            func,
-            type_,
+            rorg_func,
+            rorg_type,
             platform_type="number",
             entity_class=DynamicEnOceanNumber,
             async_add_entities=async_add_entities,

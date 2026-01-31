@@ -33,12 +33,11 @@ async def async_setup_entry(
 
     # Register listener to add button entities discovered via EEP
     async def _add_buttons_from_eep(
-        device_id, device_id_hex, entities_list, rorg, func, type_
+        device_id, entities_list, rorg, rorg_func, rorg_type
     ):
         def _kwargs_factory(
             ent: EEPEntityDef | None,
             device_id,
-            device_id_hex,
             device_name,
             rorg_int,
             func_int,
@@ -69,11 +68,10 @@ async def async_setup_entry(
             hass,
             config_entry,
             device_id,
-            device_id_hex,
             entities_list,
             rorg,
-            func,
-            type_,
+            rorg_func,
+            rorg_type,
             platform_type="button",
             entity_class=DynamicEnOceanButton,
             async_add_entities=async_add_entities,

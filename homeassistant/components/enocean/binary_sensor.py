@@ -58,11 +58,10 @@ async def async_setup_entry(
     # Register listener for EEP-discovered entities
     async def _add_binary_from_eep(
         device_id: list[int],
-        device_id_hex: str,
         entities_list: list[EEPEntityDef],
         rorg: int,
-        func: int,
-        type_: int,
+        rorg_func: int,
+        rorg_type: int,
     ):
         """Add binary sensor entities for a discovered device from EEP profile."""
 
@@ -70,11 +69,10 @@ async def async_setup_entry(
             hass,
             config_entry,
             device_id,
-            device_id_hex,
             entities_list,
             rorg,
-            func,
-            type_,
+            rorg_func,
+            rorg_type,
             platform_type="binary_sensor",
             entity_class=DynamicEnOceanBinarySensor,
             async_add_entities=async_add_entities,

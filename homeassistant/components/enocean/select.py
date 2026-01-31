@@ -31,7 +31,7 @@ async def async_setup_entry(
     """Set up EnOcean select entities."""
     # Selects are created dynamically from discovery events
 
-    async def _add_selects_from_eep(device_id, entities_list, rorg, func, type_):
+    async def _add_selects_from_eep(device_id, entities_list, rorg, func, type_, *args):
         """Add select entities for a discovered device from EEP profile."""
         await async_create_entities_from_eep(
             hass,

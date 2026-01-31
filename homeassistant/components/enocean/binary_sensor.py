@@ -62,6 +62,7 @@ async def async_setup_entry(
         rorg: int,
         rorg_func: int,
         rorg_type: int,
+        *args,
     ):
         """Add binary sensor entities for a discovered device from EEP profile."""
 

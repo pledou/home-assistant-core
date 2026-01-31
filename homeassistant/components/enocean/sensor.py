@@ -126,7 +126,7 @@ async def async_setup_entry(
 
     # Register listener for EEP-discovered entities
     async def _add_entities_from_eep(
-        device_id, entities_list, rorg, rorg_func, rorg_type
+        device_id, entities_list, rorg, rorg_func, rorg_type, *args
     ):
         """Add sensor entities for a discovered device from EEP profile."""
 

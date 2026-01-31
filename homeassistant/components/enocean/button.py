@@ -33,7 +33,7 @@ async def async_setup_entry(
 
     # Register listener to add button entities discovered via EEP
     async def _add_buttons_from_eep(
-        device_id, entities_list, rorg, rorg_func, rorg_type
+        device_id, entities_list, rorg, rorg_func, rorg_type, *args
     ):
         def _kwargs_factory(
             ent: EEPEntityDef | None,

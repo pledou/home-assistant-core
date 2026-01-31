@@ -37,7 +37,7 @@ async def async_setup_entry(
 
     # Register listener for EEP-discovered number entities using shared factory
     async def _add_numbers_from_eep(
-        device_id, entities_list, rorg, rorg_func, rorg_type
+        device_id, entities_list, rorg, rorg_func, rorg_type, *args
     ):
         """Add number entities for a discovered device from EEP profile."""
         if not entities_list:

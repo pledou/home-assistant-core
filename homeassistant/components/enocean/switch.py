@@ -50,14 +50,13 @@ async def async_setup_entry(
 
     # Register listener to add switch entities discovered via EEP using shared factory
     async def _add_switches_from_eep(
-        device_id, entities_list, rorg, rorg_func, rorg_type
+        device_id, entities_list, rorg, rorg_func, rorg_type, *args
     ):
         """Add switch entities for a discovered device from EEP profile."""
 
         def _kwargs_factory(
             ent,
             device_id,
-            device_id_hex,
             device_name,
             rorg_int,
             func_int,

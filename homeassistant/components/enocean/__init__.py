@@ -1,5 +1,6 @@
 """Support for EnOcean devices."""
 
+from collections.abc import Awaitable, Callable
 import logging
 
 from enocean.protocol.eep import get_eep as _get_eep
@@ -9,20 +10,19 @@ from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import CONF_DEVICE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv, device_registry as dr
-from homeassistant.helpers.dispatcher import (
-    async_dispatcher_connect,
-    async_dispatcher_send,
-)
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.typing import ConfigType
 
 from .const import DATA_ENOCEAN, DOMAIN, ENOCEAN_DONGLE, PLATFORMS
 from .dongle import SIGNAL_DISCOVER_DEVICE, EnOceanDongle
 from .eep_devices import load_device_profile_from_packet
 from .entity import format_device_id_hex, format_device_id_hex_underscore
-from .types import DiscoveryInfo, EepProfile
+from .types import DiscoveryInfo, EEPEntityDef, EepProfile
 
-# Signal sent when new entities should be added (after device discovery)
-SIGNAL_ADD_ENTITIES = "enocean_add_entities"
+# Registry for platform entity add callbacks
+PLATFORM_ADD_ENTITIES_CALLBACKS: dict[
+    str, Callable[[list[int], list[EEPEntityDef], int, int, int], Awaitable[None]]
+] = {}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,6 +57,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set up the EnOcean dongle (following ZHA pattern)."""
     enocean_data = hass.data.setdefault(DATA_ENOCEAN, {})
+    enocean_data["platform_callbacks"] = {}
 
     # Only the dongle config entry is supported
     if CONF_DEVICE not in config_entry.data:
@@ -200,17 +201,30 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                     len(entities),
                     format_device_id_hex(device_id),
                 )
-                # Signal platforms to add the generated entities
-                # Pass device_id (list[int]) for entity creation
-                async_dispatcher_send(
-                    hass,
-                    SIGNAL_ADD_ENTITIES,
-                    device_id,
-                    entities,
-                    rorg,
-                    rorg_func,
-                    rorg_type,
-                )
+                # Call registered platform callbacks directly to add entities
+                platform_callbacks = enocean_data.get("platform_callbacks", {})
+                for callback in platform_callbacks.values():
+                    try:
+                        await callback(
+                            device_id,
+                            entities,
+                            rorg,
+                            rorg_func,
+                            rorg_type,
+                        )
+                    except (
+                        TimeoutError,
+                        RuntimeError,
+                        ValueError,
+                        TypeError,
+                        LookupError,
+                        OSError,
+                    ) as err:
+                        _LOGGER.error(
+                            "Error calling platform callback for device %s: %s",
+                            format_device_id_hex(device_id),
+                            err,
+                        )
             else:
                 # Signal platforms without entities if profile couldn't be loaded
                 _LOGGER.warning(

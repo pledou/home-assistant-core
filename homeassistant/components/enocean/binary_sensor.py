@@ -17,11 +17,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_DEVICE_CLASS, CONF_ID, CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import SIGNAL_ADD_ENTITIES
-from .const import LOGGER
+from .const import DATA_ENOCEAN, LOGGER
 from .eep_devices import EEPEntityDef
 from .entity import DynamicEnoceanEntity, EnOceanEntity, async_create_entities_from_eep
 
@@ -47,6 +45,7 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up EnOcean binary sensor entities."""
+    enocean_data = hass.data.get(DATA_ENOCEAN, {})
     entities: list[BinarySensorEntity] = []
 
     # Device-specific binary sensors are created dynamically from discovery
@@ -55,14 +54,13 @@ async def async_setup_entry(
     if entities:
         async_add_entities(entities)
 
-    # Register listener for EEP-discovered entities
+    # Register callback for EEP-discovered entities
     async def _add_binary_from_eep(
         device_id: list[int],
         entities_list: list[EEPEntityDef],
         rorg: int,
         rorg_func: int,
         rorg_type: int,
-        *args,
     ):
         """Add binary sensor entities for a discovered device from EEP profile."""
 
@@ -80,9 +78,9 @@ async def async_setup_entry(
             entity_kwargs_factory=None,
         )
 
-    config_entry.async_on_unload(
-        async_dispatcher_connect(hass, SIGNAL_ADD_ENTITIES, _add_binary_from_eep)
-    )
+    # Register the callback in the platform callbacks registry
+    platform_callbacks = enocean_data.get("platform_callbacks", {})
+    platform_callbacks["binary_sensor"] = _add_binary_from_eep
 
 
 class EnOceanBinarySensor(EnOceanEntity, BinarySensorEntity):

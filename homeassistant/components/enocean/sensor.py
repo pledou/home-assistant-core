@@ -30,11 +30,9 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import SIGNAL_ADD_ENTITIES
-from .const import LOGGER
+from .const import DATA_ENOCEAN, LOGGER
 from .entity import DynamicEnoceanEntity, EnOceanEntity, async_create_entities_from_eep
 from .types import EEPEntityDef
 
@@ -117,6 +115,7 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up EnOcean sensor entities."""
+    enocean_data = hass.data.get(DATA_ENOCEAN, {})
     entities: list[EnOceanSensor] = []
 
     # Device-specific sensors are created dynamically from discovery events.
@@ -124,9 +123,9 @@ async def async_setup_entry(
     if entities:
         async_add_entities(entities)
 
-    # Register listener for EEP-discovered entities
+    # Register callback for EEP-discovered entities
     async def _add_entities_from_eep(
-        device_id, entities_list, rorg, rorg_func, rorg_type, *args
+        device_id, entities_list, rorg, rorg_func, rorg_type
     ):
         """Add sensor entities for a discovered device from EEP profile."""
 
@@ -143,10 +142,9 @@ async def async_setup_entry(
             async_add_entities=async_add_entities,
         )
 
-    # Keep registration so it is cleaned up on unload
-    config_entry.async_on_unload(
-        async_dispatcher_connect(hass, SIGNAL_ADD_ENTITIES, _add_entities_from_eep)
-    )
+    # Register the callback in the platform callbacks registry
+    platform_callbacks = enocean_data.get("platform_callbacks", {})
+    platform_callbacks["sensor"] = _add_entities_from_eep
 
 
 class EnOceanSensor(EnOceanEntity, RestoreSensor):

@@ -14,11 +14,9 @@ from enocean.protocol.eep_metadata import get_field_value_with_enum
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import SIGNAL_ADD_ENTITIES
-from .const import LOGGER
+from .const import DATA_ENOCEAN, LOGGER
 from .entity import DynamicEnoceanEntity, EnOceanEntity, async_create_entities_from_eep
 from .types import EEPEntityDef
 
@@ -29,9 +27,10 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up EnOcean select entities."""
+    enocean_data = hass.data.get(DATA_ENOCEAN, {})
     # Selects are created dynamically from discovery events
 
-    async def _add_selects_from_eep(device_id, entities_list, rorg, func, type_, *args):
+    async def _add_selects_from_eep(device_id, entities_list, rorg, func, type_):
         """Add select entities for a discovered device from EEP profile."""
         await async_create_entities_from_eep(
             hass,
@@ -46,9 +45,9 @@ async def async_setup_entry(
             async_add_entities=async_add_entities,
         )
 
-    config_entry.async_on_unload(
-        async_dispatcher_connect(hass, SIGNAL_ADD_ENTITIES, _add_selects_from_eep)
-    )
+    # Register the callback in the platform callbacks registry
+    platform_callbacks = enocean_data.get("platform_callbacks", {})
+    platform_callbacks["select"] = _add_selects_from_eep
 
 
 class EnOceanSelect(EnOceanEntity, SelectEntity):

@@ -16,7 +16,6 @@ from homeassistant.helpers.entity_platform import (
 )
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from . import SIGNAL_ADD_ENTITIES
 from .const import DATA_ENOCEAN, DOMAIN, ENOCEAN_DONGLE, LOGGER
 from .dongle import SIGNAL_LEARNING_MODE_CHANGED
 from .entity import (
@@ -48,9 +47,9 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
-    # Register listener to add switch entities discovered via EEP using shared factory
+    # Register callback to add switch entities discovered via EEP using shared factory
     async def _add_switches_from_eep(
-        device_id, entities_list, rorg, rorg_func, rorg_type, *args
+        device_id, entities_list, rorg, rorg_func, rorg_type
     ):
         """Add switch entities for a discovered device from EEP profile."""
 
@@ -90,9 +89,9 @@ async def async_setup_entry(
             entity_kwargs_factory=_kwargs_factory,
         )
 
-    config_entry.async_on_unload(
-        async_dispatcher_connect(hass, SIGNAL_ADD_ENTITIES, _add_switches_from_eep)
-    )
+    # Register the callback in the platform callbacks registry
+    platform_callbacks = enocean_data.get("platform_callbacks", {})
+    platform_callbacks["switch"] = _add_switches_from_eep
 
 
 async def async_setup_platform(

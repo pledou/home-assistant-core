@@ -8,10 +8,8 @@ from homeassistant.components.number import RestoreNumber
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import SIGNAL_ADD_ENTITIES
 from .const import DATA_ENOCEAN, DOMAIN, ENOCEAN_DONGLE
 from .entity import DynamicEnoceanEntity, EnOceanEntity, async_create_entities_from_eep
 from .types import EEPEntityDef
@@ -35,9 +33,9 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
-    # Register listener for EEP-discovered number entities using shared factory
+    # Register callback for EEP-discovered number entities using shared factory
     async def _add_numbers_from_eep(
-        device_id, entities_list, rorg, rorg_func, rorg_type, *args
+        device_id, entities_list, rorg, rorg_func, rorg_type
     ):
         """Add number entities for a discovered device from EEP profile."""
         if not entities_list:
@@ -56,9 +54,9 @@ async def async_setup_entry(
             async_add_entities=async_add_entities,
         )
 
-    config_entry.async_on_unload(
-        async_dispatcher_connect(hass, SIGNAL_ADD_ENTITIES, _add_numbers_from_eep)
-    )
+    # Register the callback in the platform callbacks registry
+    platform_callbacks = enocean_data.get("platform_callbacks", {})
+    platform_callbacks["number"] = _add_numbers_from_eep
 
 
 class EnOceanNumber(RestoreNumber, EnOceanEntity):

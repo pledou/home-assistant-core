@@ -5,10 +5,8 @@ from __future__ import annotations
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import SIGNAL_ADD_ENTITIES
 from .const import DATA_ENOCEAN, ENOCEAN_DONGLE
 from .entity import (
     DynamicEnoceanEntity,
@@ -31,9 +29,9 @@ async def async_setup_entry(
     if not dongle:
         return
 
-    # Register listener to add button entities discovered via EEP
+    # Register callback to add button entities discovered via EEP
     async def _add_buttons_from_eep(
-        device_id, entities_list, rorg, rorg_func, rorg_type, *args
+        device_id, entities_list, rorg, rorg_func, rorg_type
     ):
         def _kwargs_factory(
             ent: EEPEntityDef | None,
@@ -78,9 +76,9 @@ async def async_setup_entry(
             entity_kwargs_factory=_kwargs_factory,
         )
 
-    config_entry.async_on_unload(
-        async_dispatcher_connect(hass, SIGNAL_ADD_ENTITIES, _add_buttons_from_eep)
-    )
+    # Register the callback in the platform callbacks registry
+    platform_callbacks = enocean_data.get("platform_callbacks", {})
+    platform_callbacks["button"] = _add_buttons_from_eep
 
 
 class EnOceanButton(EnOceanEntity, ButtonEntity):

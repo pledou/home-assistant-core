@@ -176,8 +176,6 @@ class EnOceanDongle:
         """
 
         if isinstance(packet, RadioPacket):
-            # Log the received packet (useful to see if CHAINED are resolved)
-            _LOGGER.debug("Received EnOcean RadioPacket: rorg=0x%02X", packet.rorg)
             # Safely obtain optional attributes from packet to avoid AttributeError
             rorg_of_eep_val = getattr(packet, "rorg_of_eep", None)
             rorg_manuf_val = getattr(packet, "rorg_manufacturer", None)
@@ -335,7 +333,7 @@ class EnOceanDongle:
         # Extract sensor information from parsed packet
         try:
             # IDAPP: Unique sensor ID (32-bit)
-            sensor_id = packet.parsed.get("IDAPP", {}).get("raw_value")
+            sensor_id = packet.parsed.get("IDAPP", {})
             if not sensor_id:
                 return
 
@@ -345,7 +343,7 @@ class EnOceanDongle:
             prof_app_desc = prof_app_data.get("value", "Unknown")
 
             # CAPTINDEX: Sensor index (for multiple sensors)
-            capt_index = packet.parsed.get("CAPTINDEX", {}).get("raw_value", 0)
+            capt_index = packet.parsed.get("CAPTINDEX", {})
 
             _LOGGER.debug(
                 "MSC CMD=8 extracted - sensor_id=%s, prof_app_value=%s, prof_app_desc='%s', capt_index=%s",
@@ -440,8 +438,8 @@ class EnOceanDongle:
                 )
             )
 
-        except (KeyError, AttributeError, TypeError) as e:
-            _LOGGER.debug("Error parsing Ventilairsec sensor data: %s", e)
+        except (KeyError, AttributeError, TypeError):
+            _LOGGER.error("Error parsing Ventilairsec sensor data CMD=8")
 
 
 def detect():

@@ -49,17 +49,15 @@ class EntityType(Enum):
 class EEPEntityDef:
     """Definition for a generic EEP-derived entity."""
 
-    name: str
+    description: str
     rorg: int
     rorg_func: int
     rorg_type: int
+    data_field: str
     entity_type: EntityType = EntityType.SENSOR
-    data_field: str | None = None
     unit: str | None = None
     device_class: str | None = None
     min_value: float | None = None
     max_value: float | None = None
     enum_options: list[str] | None = None
-    command: str | None = None
     offset: int | None = None
-    size: int | None = None

@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from enocean.utils import combine_hex
 import voluptuous as vol
 
 from homeassistant.components.light import (
@@ -75,7 +74,6 @@ class EnOceanLight(EnOceanEntity, LightEntity):
         """Initialize the EnOcean light source."""
         super().__init__(dev_id, data_field="brightness")
         self._sender_id = sender_id
-        self._attr_unique_id = str(combine_hex(dev_id))
         self._attr_name = dev_name
 
     def turn_on(self, **kwargs: Any) -> None:

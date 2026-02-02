@@ -91,19 +91,3 @@ def test_send_command_dispatches_packet(monkeypatch: pytest.MonkeyPatch) -> None
     assert signal_arg is not None  # Signal should be present
     assert pkt.packet_type == 0x01
     assert pkt.data == [1, 2, 3]
-
-
-def test_packet_matches_command() -> None:
-    """Test that _packet_matches_command correctly checks the command field."""
-    # Create a DynamicEnoceanEntity instance without invoking its __init__
-    # because platform constructors may differ; we only need _packet_matches_command
-    d = object.__new__(eno_entity.DynamicEnoceanEntity)
-    d._command = 3
-
-    # data[1] should encode command in high nibble: (3 << 4) | low_nibble
-    pkt = SimpleNamespace(data=bytes([0x00, (3 << 4) | 0x0F]))
-    assert eno_entity.DynamicEnoceanEntity._packet_matches_command(d, pkt)
-
-    # too short data -> False
-    pkt_short = SimpleNamespace(data=bytes([0x00]))
-    assert not eno_entity.DynamicEnoceanEntity._packet_matches_command(d, pkt_short)

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
+import struct
 
-from enocean.protocol.eep_metadata import get_field_value_with_enum
 import voluptuous as vol
 
 from homeassistant.components.binary_sensor import (
@@ -181,7 +181,7 @@ class DynamicEnOceanBinarySensor(DynamicEnoceanEntity, BinarySensorEntity):
         data_field: str,
         device_class: BinarySensorDeviceClass | None = None,
         fields: EEPEntityDef | None = None,
-        command: int | None = None,
+        attr_name: str | None = None,
     ) -> None:
         """Initialize the dynamic EnOcean binary sensor."""
         # Initialize shared dynamic behaviour then set device-specific attrs
@@ -193,8 +193,8 @@ class DynamicEnOceanBinarySensor(DynamicEnoceanEntity, BinarySensorEntity):
             rorg=rorg,
             rorg_func=rorg_func,
             rorg_type=rorg_type,
-            command=command,
             fields=fields,
+            attr_name=attr_name,
         )
         BinarySensorEntity.__init__(self)
         # Normalize device class enum
@@ -209,28 +209,16 @@ class DynamicEnOceanBinarySensor(DynamicEnoceanEntity, BinarySensorEntity):
 
     def value_changed(self, packet) -> None:
         """Update the internal state when a packet arrives."""
-        if not packet.data or len(packet.data) < 2:
-            return
-        # Use shared helpers for parser initialization and command matching
-        if not self._packet_matches_command(packet):
-            return
-
         try:
-            parsed = self._parse_packet(packet)
-            if not parsed or not self._data_field:
+            # Packet should already be parsed by dongle callback
+            if not packet.parsed or not self._data_field:
                 return
-
-            if self._fields:
-                value = get_field_value_with_enum(
-                    parsed, self._data_field, self._fields
-                )
-            else:
-                value = parsed.get(self._data_field)
+            value = self._get_parsed_value(packet, self._data_field)
 
             LOGGER.debug(
                 "Dynamic binary sensor %s: CMD=%s, Field=%s, Value=%s",
                 self._attr_name,
-                parsed.get("CMD"),
+                packet.parsed.get("CMD"),
                 self._data_field,
                 value,
             )
@@ -241,8 +229,9 @@ class DynamicEnOceanBinarySensor(DynamicEnoceanEntity, BinarySensorEntity):
                     self._attr_is_on = bool(value)
                 except (TypeError, ValueError):
                     self._attr_is_on = bool(int(value))
+
                 self.schedule_update_ha_state()
-        except (ValueError, TypeError, KeyError, OSError) as err:
+        except (ValueError, TypeError, KeyError, OSError, struct.error) as err:
             LOGGER.error(
                 "Error parsing dynamic binary sensor packet for %s: %s",
                 self._attr_name,

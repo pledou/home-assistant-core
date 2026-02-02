@@ -8,12 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DATA_ENOCEAN, ENOCEAN_DONGLE
-from .entity import (
-    DynamicEnoceanEntity,
-    EnOceanEntity,
-    async_create_entities_from_eep,
-    format_device_id_hex_underscore,
-)
+from .entity import DynamicEnoceanEntity, EnOceanEntity, async_create_entities_from_eep
 from .types import EEPEntityDef
 
 
@@ -33,24 +28,16 @@ async def async_setup_entry(
     async def _add_buttons_from_eep(
         device_id, entities_list, rorg, rorg_func, rorg_type
     ):
-        def _kwargs_factory(
-            ent: EEPEntityDef | None,
-            device_id,
-            device_name,
-            rorg_int,
-            func_int,
-            type_int,
-            description,
-        ):
+        def _kwargs_factory(ent: EEPEntityDef | None):
             # Extract channel/offset and a human name for the button
             if isinstance(ent, EEPEntityDef):
                 channel = ent.offset
-                name = ent.name or (
+                description = ent.description or (
                     f"Button {channel}" if channel is not None else None
                 )
             else:
                 channel = getattr(ent, "offset", None)
-                name = getattr(ent, "name", None) or (
+                description = getattr(ent, "description", None) or (
                     f"Button {channel}" if channel is not None else None
                 )
 
@@ -58,7 +45,7 @@ async def async_setup_entry(
                 return None
 
             try:
-                return {"channel": int(channel), "button_name": name}
+                return {"channel": int(channel), "button_name": description}
             except (TypeError, ValueError):
                 return None
 
@@ -87,18 +74,18 @@ class EnOceanButton(EnOceanEntity, ButtonEntity):
     def __init__(
         self,
         dev_id: list[int],
-        dev_id_hex: str,
         dev_name: str,
         channel: int,
         button_name: str,
     ) -> None:
         """Initialize the EnOcean button device."""
         super().__init__(
-            dev_id, data_field=button_name, attr_name=button_name, dev_name=dev_name
+            dev_id,
+            data_field=f"{button_name}_{channel}",
+            attr_name=button_name,
+            dev_name=dev_name,
         )
-        self._dev_id_hex = dev_id_hex
         self.channel = channel
-        self._attr_unique_id = f"{format_device_id_hex_underscore(dev_id)}-{channel}"
         self._attr_name = f"{dev_name} {button_name}"
 
     async def async_press(self) -> None:
@@ -119,7 +106,6 @@ class DynamicEnOceanButton(DynamicEnoceanEntity, EnOceanButton):
     def __init__(
         self,
         dev_id: list[int],
-        dev_id_hex: str,
         dev_name: str,
         channel: int,
         button_name: str,
@@ -127,22 +113,18 @@ class DynamicEnOceanButton(DynamicEnoceanEntity, EnOceanButton):
         rorg_func: int,
         rorg_type: int,
         fields: EEPEntityDef | None = None,
-        command: int | None = None,
     ) -> None:
         """Initialize the dynamic EnOcean button device."""
         super().__init__(
             dev_id=dev_id,
             dev_name=dev_name,
-            data_field=f"{button_name}-{channel}",
+            data_field=f"{button_name}_{channel}",
             rorg=rorg,
             rorg_func=rorg_func,
             rorg_type=rorg_type,
             attr_name=button_name,
-            command=command,
             fields=fields,
         )
-        # Override button-specific attributes set by EnOceanButton.__init__ indirectly
-        self._dev_id_hex = dev_id_hex
+        # Initialize button-specific attributes
         self.channel = channel
-        self._attr_unique_id = f"{format_device_id_hex_underscore(dev_id)}-{channel}"
         self._attr_name = f"{dev_name} {button_name}"

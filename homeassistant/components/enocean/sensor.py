@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 import struct
 
@@ -55,8 +54,6 @@ SENSOR_TYPE_WINDOWHANDLE = "windowhandle"
 class EnOceanSensorEntityDescription(SensorEntityDescription):
     """Describes EnOcean sensor entity."""
 
-    unique_id: Callable[[str], str | None]
-
 
 SENSOR_DESC_TEMPERATURE = EnOceanSensorEntityDescription(
     key=SENSOR_TYPE_TEMPERATURE,
@@ -64,7 +61,6 @@ SENSOR_DESC_TEMPERATURE = EnOceanSensorEntityDescription(
     native_unit_of_measurement=UnitOfTemperature.CELSIUS,
     device_class=SensorDeviceClass.TEMPERATURE,
     state_class=SensorStateClass.MEASUREMENT,
-    unique_id=lambda dev_id_hex: f"{dev_id_hex}-{SENSOR_TYPE_TEMPERATURE}",
 )
 
 SENSOR_DESC_HUMIDITY = EnOceanSensorEntityDescription(
@@ -73,7 +69,6 @@ SENSOR_DESC_HUMIDITY = EnOceanSensorEntityDescription(
     native_unit_of_measurement=PERCENTAGE,
     device_class=SensorDeviceClass.HUMIDITY,
     state_class=SensorStateClass.MEASUREMENT,
-    unique_id=lambda dev_id_hex: f"{dev_id_hex}-{SENSOR_TYPE_HUMIDITY}",
 )
 
 SENSOR_DESC_POWER = EnOceanSensorEntityDescription(
@@ -82,14 +77,12 @@ SENSOR_DESC_POWER = EnOceanSensorEntityDescription(
     native_unit_of_measurement=UnitOfPower.WATT,
     device_class=SensorDeviceClass.POWER,
     state_class=SensorStateClass.MEASUREMENT,
-    unique_id=lambda dev_id_hex: f"{dev_id_hex}-{SENSOR_TYPE_POWER}",
 )
 
 SENSOR_DESC_WINDOWHANDLE = EnOceanSensorEntityDescription(
     key=SENSOR_TYPE_WINDOWHANDLE,
     name="WindowHandle",
     translation_key="window_handle",
-    unique_id=lambda dev_id_hex: f"{dev_id_hex}-{SENSOR_TYPE_WINDOWHANDLE}",
 )
 
 
@@ -116,12 +109,6 @@ async def async_setup_entry(
 ) -> None:
     """Set up EnOcean sensor entities."""
     enocean_data = hass.data.get(DATA_ENOCEAN, {})
-    entities: list[EnOceanSensor] = []
-
-    # Device-specific sensors are created dynamically from discovery events.
-
-    if entities:
-        async_add_entities(entities)
 
     # Register callback for EEP-discovered entities
     async def _add_entities_from_eep(
@@ -159,11 +146,7 @@ class EnOceanSensor(EnOceanEntity, RestoreSensor):
         """Initialize the EnOcean sensor device."""
         # Convert UNDEFINED to None for attr_name
         attr_name_value: str | None = None
-        if (
-            description.name
-            and description.name
-            is not SensorEntityDescription.__dataclass_fields__["name"].default
-        ):
+        if description.name:
             attr_name_value = str(description.name)
         super().__init__(
             dev_id,
@@ -200,7 +183,6 @@ class EnOceanTemperatureSensor(EnOceanSensor):
     def __init__(
         self,
         dev_id: list[int],
-        dev_id_hex: str,
         dev_name: str,
         description: EnOceanSensorEntityDescription,
         *,
@@ -280,15 +262,14 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
     def __init__(
         self,
         dev_id: list[int],
-        dev_id_hex: str,
         dev_name: str,
         rorg: int,
         rorg_func: int,
         rorg_type: int,
-        data_field: str | None = None,
+        data_field: str,
         device_class: SensorDeviceClass | str | None = None,
         fields: EEPEntityDef | None = None,
-        command: int | None = None,
+        attr_name: str | None = None,
     ) -> None:
         """Initialize the dynamic EnOcean sensor.
 
@@ -300,7 +281,7 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
             device_class: Device class for the sensor
             rorg/rorg_func/rorg_type: EEP identifiers for per-instance parsing
             fields: Optional preloaded fields mapping (from load_eep_fields)
-            command: Command ID for this entity
+            attr_name: Optional entity attribute name (defaults to data_field)
             description: Optional entity description
         """
         EnOceanSensor.__init__(
@@ -309,8 +290,7 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
             dev_name=dev_name,
             description=EnOceanSensorEntityDescription(
                 key=data_field or "sensor",
-                name=dev_name,
-                unique_id=lambda dev_id_hex: f"{dev_id_hex}-{data_field or 'sensor'}",
+                name=attr_name or data_field or dev_name,
             ),
         )
 
@@ -323,13 +303,11 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
             rorg_func=rorg_func,
             rorg_type=rorg_type,
             dev_name=dev_name,
-            command=command,
             fields=fields,
         )
         # Set sensor-specific attributes
-        self._dev_id_hex = dev_id_hex
-        self._attr_name = f"{dev_name}"
-        if fields is not None and fields.unit:
+        self._attr_name = attr_name or data_field or dev_name
+        if fields is not None and isinstance(fields, EEPEntityDef) and fields.unit:
             self._unit = fields.unit
         if device_class is not None:
             self._attr_device_class = device_class  # type: ignore[assignment]
@@ -338,34 +316,25 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
         """Update the internal state of the sensor when a packet arrives."""
         if not packet.data or len(packet.data) < 2:
             return
-        # Use shared helpers for parser initialization and command matching
-        if not self._packet_matches_command(packet):
-            return
 
         try:
-            parsed = self._parse_packet(packet)
-            if not parsed or not self._data_field:
+            # Packet should already be parsed by dongle callback
+            if not packet.parsed or not self._data_field:
                 return
 
             if self._fields:
                 value = get_field_value_with_enum(
-                    parsed, self._data_field, self._fields
+                    packet.parsed, self._data_field, self._fields
                 )
             else:
-                value = parsed.get(self._data_field)
-
-            LOGGER.debug(
-                "Dynamic sensor %s: CMD=%s, Field=%s, Value=%s",
-                self._attr_name,
-                parsed.get("CMD"),
-                self._data_field,
-                value,
-            )
+                value = self._get_parsed_value(packet, self._data_field)
 
             if value is not None:
                 self._attr_native_value = value
                 self.schedule_update_ha_state()
         except (ValueError, KeyError, OSError, TypeError, struct.error) as err:
             LOGGER.error(
-                "Error parsing dynamic sensor packet for %s: %s", self._attr_name, err
+                "Error processing dynamic sensor packet for %s: %s",
+                self._attr_name,
+                err,
             )

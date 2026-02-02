@@ -66,10 +66,10 @@ class EnOceanNumber(RestoreNumber, EnOceanEntity):
         self,
         dev_id: list[int],
         dev_name: str,
+        data_field: str,
         min_value: float | None = None,
         max_value: float | None = None,
         unit: str | None = None,
-        data_field: str | None = None,
         attr_name: str | None = None,
         dev_class: str | None = None,
     ) -> None:
@@ -103,14 +103,13 @@ class DynamicEnOceanNumber(DynamicEnoceanEntity, EnOceanNumber):
         rorg: int,
         rorg_func: int,
         rorg_type: int,
-        data_field: str | None = None,
+        data_field: str,
         dev_class: str | None = None,
         min_value: float | None = None,
         max_value: float | None = None,
         unit: str | None = None,
         fields: EEPEntityDef | None = None,
         attr_name: str | None = None,
-        command: int | None = None,
     ) -> None:
         """Initialize the dynamic EnOcean number and store parser parameters for lazy initialization."""
         # Initialize shared dynamic behaviour
@@ -130,7 +129,6 @@ class DynamicEnOceanNumber(DynamicEnoceanEntity, EnOceanNumber):
             rorg_func=rorg_func,
             rorg_type=rorg_type,
             dev_name=dev_name,
-            command=command,
             fields=fields,
             dev_class=dev_class,
             attr_name=attr_name,
@@ -181,18 +179,16 @@ class DynamicEnOceanNumber(DynamicEnoceanEntity, EnOceanNumber):
         if not packet.data or len(packet.data) < 2:
             return
 
-        # Use shared helpers for parser initialization and command matching
-        if not self._packet_matches_command(packet):
-            return
-
-        parsed = self._parse_packet(packet)
-        if not parsed or not self._data_field:
+        # Packet should already be parsed by dongle callback
+        if not packet.parsed or not self._data_field:
             return
 
         if self._fields and get_field_value_with_enum is not None:
-            value = get_field_value_with_enum(parsed, self._data_field, self._fields)
+            value = get_field_value_with_enum(
+                packet.parsed, self._data_field, self._fields
+            )
         else:
-            value = parsed.get(self._data_field)
+            value = self._get_parsed_value(packet, self._data_field)
 
         if value is not None:
             try:

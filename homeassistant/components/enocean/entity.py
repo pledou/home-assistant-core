@@ -1,8 +1,9 @@
 """Representation of an EnOcean device."""
 
+import inspect
+
 from enocean.protocol.eep_metadata import load_eep_fields
 from enocean.protocol.packet import Packet
-from enocean.protocol.parser import Parser
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
@@ -59,6 +60,10 @@ class EnOceanEntity(Entity):
     def _message_received_callback(self, packet):
         """Handle incoming packets."""
 
+        # Skip teach-in packets (RORG 0xD4) - they don't contain sensor data
+        if hasattr(packet, "rorg") and packet.rorg == 0xD4:
+            return
+
         # Compare packet sender integer to device id converted to integer
         try:
             sender_int_expected = int.from_bytes(bytes(self.dev_id), "big")
@@ -99,10 +104,10 @@ def format_device_id_hex_underscore(dev_id: list[int]) -> str:
 
 
 class DynamicEnoceanEntity(EnOceanEntity):
-    """Base class for dynamic EnOcean entities that use EEP parser.
+    """Base class for dynamic EnOcean entities that use pre-parsed packet data.
 
-    Provides lazy parser initialization, command matching and parsing
-    helpers so platform implementations can reuse the logic.
+    This class expects packets to be pre-parsed by the dongle's callback.
+    Entities simply read from packet.parsed instead of doing their own parsing.
     """
 
     def __init__(
@@ -115,10 +120,9 @@ class DynamicEnoceanEntity(EnOceanEntity):
         dev_name: str | None = None,
         dev_class: str | None = None,
         attr_name: str | None = None,
-        command: int | None = None,
         fields: EEPEntityDef | None = None,
     ) -> None:
-        """Initialize the dynamic EnOcean entity and store parser parameters for lazy initialization."""
+        """Initialize the dynamic EnOcean entity."""
         # Call EnOceanEntity initializer directly to avoid MRO issues
         # where super() would resolve to a concrete sensor's __init__
         # that requires additional positional arguments.
@@ -131,64 +135,47 @@ class DynamicEnoceanEntity(EnOceanEntity):
             dev_class=dev_class,
         )
 
-        # Parser parameters
+        # Store EEP profile info for reference (parsing is done by dongle)
         self._rorg = rorg
         self._rorg_func = rorg_func
         self._rorg_type = rorg_type
-        self._parser: object | None = None
-        self._parser_initialized = False
-
-        try:
-            self._command = int(str(command), 0) if command is not None else None
-        except (ValueError, TypeError):
-            self._command = None
-
         self._fields = fields
 
-    def _ensure_parser(self) -> None:
-        """Ensure the EEP Parser is initialized (lazy)."""
-        if self._parser_initialized:
-            return
-        try:
-            self._parser = Parser(
-                rorg=self._rorg, func=self._rorg_func, type_=self._rorg_type
-            )
-        except (FileNotFoundError, OSError, ValueError) as err:
-            LOGGER.debug(
-                "Failed to initialize EEP parser for %s: %s",
-                self._attr_unique_id,
-                err,
-            )
-            self._parser = None
-        finally:
-            self._parser_initialized = True
+    def _get_parsed_value(self, packet, field_name: str):
+        """Get a field value from the pre-parsed packet data.
 
-    def _packet_matches_command(self, packet) -> bool:
-        """Return True if packet matches registered command or if no command set."""
-        if self._command is None:
-            return True
-        if not getattr(packet, "data", None) or len(packet.data) < 2:
-            return False
-        pkt_cmd = (packet.data[1] & 0xF0) >> 4
-        return pkt_cmd == self._command
+        The packet should already be parsed by the dongle's callback.
+        This method simply extracts the requested field from packet.parsed.
 
-    def _parse_packet(self, packet):
-        """Parse packet using the initialized parser and registered command.
+        Args:
+            packet: EnOcean packet with parsed data
+            field_name: Name of the field to extract
 
-        Returns parsed mapping or None on failure.
+        Returns:
+            Field value or None if not found
         """
-        self._ensure_parser()
-        if self._parser is None:
-            return None
-        try:
-            return self._parser.parse_packet(packet.data, command=self._command)
-        except (ValueError, TypeError, KeyError, IndexError, OSError) as err:
+        if not packet.parsed:
             LOGGER.debug(
-                "Failed to parse packet for %s: %s",
+                "Packet for %s has no parsed data - ensure device profile is registered",
+                self._attr_unique_id,
+            )
+            return None
+
+        try:
+            # Handle nested dict structure (e.g., {"FIELD": {"raw_value": 123}})
+            field_data = packet.parsed.get(field_name)
+        except (KeyError, AttributeError, TypeError) as err:
+            LOGGER.debug(
+                "Failed to extract field %s for %s: %s",
+                field_name,
                 self._attr_unique_id,
                 err,
             )
             return None
+        else:
+            if isinstance(field_data, dict):
+                return field_data.get("raw_value", field_data.get("value"))
+            return field_data
 
 
 async def async_create_entities_from_eep(
@@ -226,31 +213,65 @@ async def async_create_entities_from_eep(
     """
 
     if not entities_list:
+        LOGGER.debug(
+            "No entities provided for platform %s, device %s",
+            platform_type,
+            format_device_id_hex(device_id),
+        )
         return
+
+    LOGGER.debug(
+        "async_create_entities_from_eep called for platform %s with %d entities for device %s",
+        platform_type,
+        len(entities_list),
+        format_device_id_hex(device_id),
+    )
 
     device_registry = dr.async_get(hass)
     device_entry = device_registry.async_get_device(
         identifiers={("enocean", format_device_id_hex_underscore(device_id))}
     )
-    if not device_entry or config_entry.entry_id not in device_entry.config_entries:
+    if not device_entry:
+        LOGGER.warning(
+            "Device not found in registry for %s when creating %s entities",
+            format_device_id_hex(device_id),
+            platform_type,
+        )
+        return
+    if config_entry.entry_id not in device_entry.config_entries:
+        LOGGER.warning(
+            "Config entry %s not in device config entries for %s",
+            config_entry.entry_id,
+            format_device_id_hex(device_id),
+        )
         return
 
     device_name = device_entry.name or f"enocean {format_device_id_hex(device_id)}"
     new_entities = []
     entity_registry = er.async_get(hass)
 
+    entities_filtered = 0
     for ent in entities_list:
         try:
             # Filter by entity type
-            if getattr(ent, "entity_type", "sensor") != platform_type:
+            entity_type = getattr(ent, "entity_type", "sensor")
+            # Handle EntityType enum by getting its value
+            entity_type_str = (
+                entity_type.value if hasattr(entity_type, "value") else entity_type
+            )
+            if entity_type_str != platform_type:
+                entities_filtered += 1
                 continue
 
             # Generate consistent entity ID
             unique_suffix = (
-                (ent.data_field or ent.name or "entity").lower().replace(" ", "_")
+                (ent.data_field or ent.description or "entity")
+                .lower()
+                .replace(" ", "_")
             )
             device_hex_underscore = format_device_id_hex_underscore(device_id)
-            unique_id = f"{device_hex_underscore}_{unique_suffix}"
+            unique_id = f"{device_hex_underscore}-{unique_suffix}"
+            attr_name = ent.description or ent.data_field or "Entity"
 
             # Skip if entity already exists
             if entity_registry.async_get_entity_id(platform_type, "enocean", unique_id):
@@ -262,20 +283,6 @@ async def async_create_entities_from_eep(
                 )
                 continue
 
-            LOGGER.debug(
-                "Creating %s for device %s: data_field=%s, name=%s",
-                platform_type,
-                format_device_id_hex(device_id),
-                ent.data_field,
-                ent.name,
-            )
-
-            # Create description if provided
-            description = None
-            if hasattr(ent, "description") and ent.description:
-                description = ent.description
-
-            # Load EEP fields
             fields = await hass.async_add_executor_job(
                 load_eep_fields,
                 f"0x{rorg:X}",
@@ -290,35 +297,70 @@ async def async_create_entities_from_eep(
                 "rorg": rorg,
                 "rorg_func": rorg_func,
                 "rorg_type": rorg_type,
-                "command": getattr(ent, "command", None),
                 "fields": fields,
             }
 
-            if description:
-                entity_kwargs["description"] = description
+            if attr_name:
+                entity_kwargs["attr_name"] = attr_name
+
+            # Add enum_options if available (for select entities)
+            if hasattr(ent, "enum_options") and ent.enum_options:
+                entity_kwargs["enum_options"] = ent.enum_options
 
             # Add platform-specific kwargs
             if entity_kwargs_factory:
-                extra_kwargs = entity_kwargs_factory(
-                    ent,
-                    device_id,
-                    device_name,
-                    rorg,
-                    rorg_func,
-                    rorg_type,
-                    description,
-                )
+                extra_kwargs = entity_kwargs_factory(ent)
                 if extra_kwargs:
                     entity_kwargs.update(extra_kwargs)
 
-            # Create the entity
-            new_entities.append(
-                entity_class(
-                    device_id,
-                    device_name,
-                    **entity_kwargs,
+            entity_kwargs.setdefault("dev_name", device_name)
+
+            # Inspect the target constructor and build positional args
+            # for any required positional parameters to avoid passing the
+            # same argument both positionally and via kwargs which can
+            # raise a TypeError in some subclass __init__ implementations.
+            try:
+                sig = inspect.signature(entity_class.__init__)
+                # parameter list excluding 'self'
+                params = list(sig.parameters.values())[1:]
+                param_names = [p.name for p in params]
+            except (ValueError, TypeError):
+                params = []
+                param_names = []
+
+            positional_args = []
+            # If the constructor expects a first parameter like 'dev_id',
+            # pass the device_id positionally
+            if param_names and param_names[0] in ("dev_id"):
+                positional_args.append(device_id)
+
+            # For required positional parameters after the first, consume
+            # them from entity_kwargs and pass positionally to avoid
+            # duplicate-assignment errors
+            positional_args.extend(
+                entity_kwargs.pop(p.name)
+                for p in params[1:]
+                if (
+                    p.kind
+                    in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    )
+                    and p.default is inspect.Parameter.empty
+                    and p.name in entity_kwargs
                 )
             )
+
+            # Filter kwargs to parameters the constructor actually accepts
+            filtered_kwargs = {
+                k: v
+                for k, v in entity_kwargs.items()
+                if (not param_names) or (k in param_names)
+            }
+
+            # Create the entity using constructed args/kwargs
+            entity_obj = entity_class(*positional_args, **filtered_kwargs)
+            new_entities.append(entity_obj)
 
         except (FileNotFoundError, OSError, ValueError, TypeError) as err:
             LOGGER.exception(
@@ -330,3 +372,10 @@ async def async_create_entities_from_eep(
 
     if new_entities:
         async_add_entities(new_entities)
+    else:
+        LOGGER.warning(
+            "No %s entities created for device %s after filtering and processing %d entity definitions",
+            platform_type,
+            format_device_id_hex(device_id),
+            len(entities_list),
+        )

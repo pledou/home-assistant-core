@@ -188,6 +188,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             if eep_profile_data:
                 entities = eep_profile_data
 
+                # Register device EEP profile with dongle for systematic packet parsing
+                usb_dongle.register_device_profile(
+                    device_id, rorg, rorg_func, rorg_type
+                )
+
                 device_registry.async_get_or_create(
                     config_entry_id=config_entry.entry_id,
                     identifiers={(DOMAIN, format_device_id_hex_underscore(device_id))},
@@ -196,14 +201,36 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                     model=f"0x{rorg:02x} (func=0x{(rorg_func or 0):02x}, type=0x{rorg_type:02x})",
                 )
 
+                def _ent_val(ent, key):
+                    if isinstance(ent, dict):
+                        return ent.get(key)
+                    return getattr(ent, key, None)
+
                 _LOGGER.debug(
-                    "Creating %d entities for device %s from EEP profile",
-                    len(entities),
-                    format_device_id_hex(device_id),
+                    "Entity details: %s",
+                    [
+                        {
+                            "description": _ent_val(e, "description"),
+                            "data_field": _ent_val(e, "data_field"),
+                            "entity_type": _ent_val(e, "entity_type"),
+                        }
+                        for e in entities[:5]
+                    ],
                 )
                 # Call registered platform callbacks directly to add entities
                 platform_callbacks = enocean_data.get("platform_callbacks", {})
-                for callback in platform_callbacks.values():
+                _LOGGER.debug(
+                    "Found %d platform callbacks: %s",
+                    len(platform_callbacks),
+                    list(platform_callbacks.keys()),
+                )
+                for platform_name, callback in platform_callbacks.items():
+                    _LOGGER.debug(
+                        "Calling callback for platform %s with %d entities for device %s",
+                        platform_name,
+                        len(entities),
+                        format_device_id_hex(device_id),
+                    )
                     try:
                         await callback(
                             device_id,
@@ -212,6 +239,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                             rorg_func,
                             rorg_type,
                         )
+                        _LOGGER.debug(
+                            "Platform callback %s completed for device %s",
+                            platform_name,
+                            format_device_id_hex(device_id),
+                        )
                     except (
                         TimeoutError,
                         RuntimeError,
@@ -219,11 +251,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                         TypeError,
                         LookupError,
                         OSError,
-                    ) as err:
-                        _LOGGER.error(
-                            "Error calling platform callback for device %s: %s",
+                    ):
+                        _LOGGER.exception(
+                            "Error calling platform callback %s for device %s",
+                            platform_name,
                             format_device_id_hex(device_id),
-                            err,
                         )
             else:
                 # Signal platforms without entities if profile couldn't be loaded

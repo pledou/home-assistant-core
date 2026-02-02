@@ -57,9 +57,10 @@ class EnOceanSelect(EnOceanEntity, SelectEntity):
         self,
         dev_id: list[int],
         dev_name: str,
-        data_field: str | None = None,
+        data_field: str,
         options: list[str] | None = None,
         entity_name: str | None = None,
+        attr_name: str | None = None,
     ) -> None:
         """Initialize the select entity."""
         EnOceanEntity.__init__(
@@ -68,8 +69,9 @@ class EnOceanSelect(EnOceanEntity, SelectEntity):
             data_field=data_field or dev_name,
             dev_name=dev_name,
             dev_class=None,
-            attr_name=entity_name,
+            attr_name=attr_name or entity_name,
         )
+        SelectEntity.__init__(self)
         self._data_field: str = data_field or dev_name
         self._attr_options = options or []
         self._current_option: str | None = None
@@ -142,11 +144,12 @@ class DynamicEnOceanSelect(DynamicEnoceanEntity, EnOceanSelect):
         data_field: str,
         device_class: str | None = None,
         fields: EEPEntityDef | None = None,
-        command: int | None = None,
+        enum_options: list[str] | None = None,
+        attr_name: str | None = None,
     ) -> None:
         """Initialize the dynamic select entity."""
         # Initialize shared dynamic behaviour then set device-specific attrs
-        options = getattr(fields, "enum_options", None)
+        options = enum_options or []
 
         DynamicEnoceanEntity.__init__(
             self,
@@ -156,9 +159,9 @@ class DynamicEnOceanSelect(DynamicEnoceanEntity, EnOceanSelect):
             rorg=rorg,
             rorg_func=rorg_func,
             rorg_type=rorg_type,
-            command=command,
             dev_class=device_class,
             fields=fields,
+            attr_name=attr_name,
         )
         EnOceanSelect.__init__(
             self,
@@ -166,6 +169,7 @@ class DynamicEnOceanSelect(DynamicEnoceanEntity, EnOceanSelect):
             dev_name=dev_name,
             data_field=data_field,
             options=options,
+            attr_name=attr_name,
         )
 
     def value_changed(self, packet: Any) -> None:
@@ -200,17 +204,16 @@ class DynamicEnOceanSelect(DynamicEnoceanEntity, EnOceanSelect):
         if not packet.data or len(packet.data) < 2:
             return
 
-        if not self._packet_matches_command(packet):
-            return
-
-        parsed = self._parse_packet(packet)
-        if not parsed or not self._data_field:
+        # Packet should already be parsed by dongle callback
+        if not packet.parsed or not self._data_field:
             return
 
         if self._fields and get_field_value_with_enum is not None:
-            value = get_field_value_with_enum(parsed, self._data_field, self._fields)
+            value = get_field_value_with_enum(
+                packet.parsed, self._data_field, self._fields
+            )
         else:
-            value = parsed.get(self._data_field)
+            value = self._get_parsed_value(packet, self._data_field)
 
         if value is not None:
             raw_str = str(value)

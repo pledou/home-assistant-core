@@ -18,12 +18,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from .const import DATA_ENOCEAN, DOMAIN, ENOCEAN_DONGLE, LOGGER
 from .dongle import SIGNAL_LEARNING_MODE_CHANGED
-from .entity import (
-    DynamicEnoceanEntity,
-    EnOceanEntity,
-    async_create_entities_from_eep,
-    format_device_id_hex_underscore,
-)
+from .entity import DynamicEnoceanEntity, EnOceanEntity, async_create_entities_from_eep
 from .types import EEPEntityDef
 
 CONF_CHANNEL = "channel"
@@ -53,15 +48,7 @@ async def async_setup_entry(
     ):
         """Add switch entities for a discovered device from EEP profile."""
 
-        def _kwargs_factory(
-            ent,
-            device_id,
-            device_name,
-            rorg_int,
-            func_int,
-            type_int,
-            description,
-        ):
+        def _kwargs_factory(ent):
             # Use channel/index from offset if available as fallback
             channel = (
                 ent.get("offset")
@@ -131,18 +118,23 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
         channel: int | None = None,
     ) -> None:
         """Initialize the EnOcean switch device."""
+        # Use channel as part of the data_field for unique ID if provided
+        # This ensures multi-channel devices have distinct identifiers.
+        effective_field = data_field
+        if channel is not None and "channel" not in data_field.lower():
+            effective_field = f"{data_field}_channel_{channel}"
+
         EnOceanEntity.__init__(
             self,
             dev_id,
-            data_field=data_field,
-            attr_name=attr_name,
+            data_field=effective_field,
+            attr_name=attr_name or data_field,
             dev_name=dev_name,
             dev_class=None,
         )
         self._light = None
         self.channel = channel
-        self._attr_unique_id = f"{format_device_id_hex_underscore(dev_id)}-{channel}"
-        self._attr_name = dev_name
+        self._attr_name = attr_name or dev_name or data_field
 
     def turn_on(self, **kwargs: Any) -> None:
         """Turn on the switch."""
@@ -226,10 +218,9 @@ class DynamicEnOceanSwitch(DynamicEnoceanEntity, EnOceanSwitch):
         channel: int | None = None,
         device_class: str | None = None,
         fields: EEPEntityDef | None = None,
-        command: int | None = None,
     ) -> None:
         """Initialize the dynamic EnOcean switch device."""
-        # Initialize dynamic base (parser/command/fields) then EnOceanSwitch
+        # Initialize dynamic base (parser/fields) then EnOceanSwitch
         DynamicEnoceanEntity.__init__(
             self,
             dev_id,
@@ -239,7 +230,6 @@ class DynamicEnOceanSwitch(DynamicEnoceanEntity, EnOceanSwitch):
             rorg_type=rorg_type,
             dev_name=dev_name,
             dev_class=device_class,
-            command=command,
             fields=fields,
         )
         EnOceanSwitch.__init__(
@@ -256,28 +246,36 @@ class DynamicEnOceanSwitch(DynamicEnoceanEntity, EnOceanSwitch):
         if not packet.data or len(packet.data) < 2:
             return
 
-        # Ensure packet matches configured command
-        if not self._packet_matches_command(packet):
+        # Packet should already be parsed by dongle callback
+        if not packet.parsed or not self._fields:
+            # Fallback to base implementation for non-dynamic packets
+            super().value_changed(packet)
             return
 
         try:
-            parsed = self._parse_packet(packet)
-            if parsed and self._fields:
-                # Try to extract channel and output fields commonly used
-                ch = parsed.get("IO") or parsed.get("CH") or parsed.get("IO_NUM")
-                out = parsed.get("OV") or parsed.get("OUT") or parsed.get("OUTPUT")
-                if isinstance(ch, dict):
-                    ch = ch.get("raw_value") or ch.get("value")
-                if isinstance(out, dict):
-                    out = out.get("raw_value") or out.get("value")
-                if ch is not None and out is not None:
-                    try:
-                        if int(ch) == int(self.channel):
-                            self._attr_is_on = int(out) > 0
-                            self.schedule_update_ha_state()
-                            return
-                    except (ValueError, TypeError):
-                        pass
+            # Try to extract channel and output fields commonly used
+            ch = (
+                packet.parsed.get("IO")
+                or packet.parsed.get("CH")
+                or packet.parsed.get("IO_NUM")
+            )
+            out = (
+                packet.parsed.get("OV")
+                or packet.parsed.get("OUT")
+                or packet.parsed.get("OUTPUT")
+            )
+            if isinstance(ch, dict):
+                ch = ch.get("raw_value") or ch.get("value")
+            if isinstance(out, dict):
+                out = out.get("raw_value") or out.get("value")
+            if ch is not None and out is not None:
+                try:
+                    if int(ch) == int(self.channel):
+                        self._attr_is_on = int(out) > 0
+                        self.schedule_update_ha_state()
+                        return
+                except (ValueError, TypeError):
+                    pass
         except (ValueError, TypeError, KeyError) as err:
             LOGGER.debug(
                 "Parser failed for dynamic switch %s: %s", self._attr_unique_id, err

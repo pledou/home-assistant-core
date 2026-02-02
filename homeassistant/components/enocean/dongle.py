@@ -8,6 +8,7 @@ from os.path import basename, normpath
 from enocean.communicators import SerialCommunicator
 from enocean.protocol.constants import RORG
 from enocean.protocol.packet import RadioPacket
+from enocean.protocol.parser import Parser
 import serial
 
 from homeassistant.core import HomeAssistant
@@ -42,6 +43,9 @@ class EnOceanDongle:
         self.hass = hass
         self.dispatcher_disconnect_handle = None
         self._discovered_sensors: dict = {}  # Track discovered sensors by (parent_id, sensor_id)
+        self._device_profiles: dict[
+            tuple[int, ...], dict
+        ] = {}  # Track EEP profiles by device_id
         self._learning_task: asyncio.Task[None] | None = None
         self._learning_duration = 10  # Default 10 minutes
         self.base_id: list[int] | None = None
@@ -180,21 +184,10 @@ class EnOceanDongle:
             rorg_func = getattr(packet, "rorg_func", None)
             rorg_type = getattr(packet, "rorg_type", None)
 
-            rorg_of_eep = (
-                f"0x{rorg_of_eep_val:02X}" if rorg_of_eep_val is not None else None
-            )
-            rorg_manufacturer = (
-                f"0x{rorg_manuf_val:03X}" if rorg_manuf_val is not None else None
-            )
+            # Systematically parse packets based on known EEP profiles
+            # This ensures packet.parsed is populated before dispatching to entities
+            self._parse_packet_by_profile(packet)
 
-            _LOGGER.debug(
-                "Received EnOcean RadioPacket: rorg=0x%02X, rorg_of_eep=%s, rorg_manufacturer=%s, rorg_func=%s, rorg_type=%s",
-                packet.rorg,
-                rorg_of_eep,
-                rorg_manufacturer,
-                rorg_func,
-                rorg_type,
-            )
             # Schedule message dispatch in event loop thread-safely
             self.hass.loop.call_soon_threadsafe(
                 lambda: dispatcher_send(self.hass, SIGNAL_RECEIVE_MESSAGE, packet)
@@ -225,6 +218,11 @@ class EnOceanDongle:
                     },
                 }
 
+                # Register device profile for future packet parsing
+                self.register_device_profile(
+                    device_id, rorg_value, rorg_func or 0, rorg_type or 0
+                )
+
                 # Schedule discovery signal in event loop thread-safely
                 self.hass.loop.call_soon_threadsafe(
                     lambda: dispatcher_send(
@@ -237,25 +235,102 @@ class EnOceanDongle:
             # This extracts sensor information and creates child devices/entities
             self._process_ventilairsec_sensors(packet)
 
+    def register_device_profile(self, device_id, rorg: int, func: int, type_: int):
+        """Register EEP profile for a device to enable systematic parsing.
+
+        Args:
+            device_id: Device ID (list of ints or bytes)
+            rorg: RORG value
+            func: FUNC value
+            type_: TYPE value
+        """
+        device_key = tuple(device_id) if isinstance(device_id, list) else (device_id,)
+        self._device_profiles[device_key] = {
+            "rorg": rorg,
+            "func": func,
+            "type": type_,
+        }
+        _LOGGER.debug(
+            "Registered EEP profile for device %s: rorg=0x%02X func=0x%02X type=0x%02X",
+            format_device_id_hex(list(device_key)),
+            rorg,
+            func,
+            type_,
+        )
+
+    def _parse_packet_by_profile(self, packet):
+        """Parse packet systematically based on known device EEP profile.
+
+        This ensures packet.parsed is populated before dispatching to entities.
+        If the device profile is known, creates a parser and parses the packet data.
+
+        Args:
+            packet: EnOcean RadioPacket to parse
+        """
+        # Get device key
+        device_key = (
+            tuple(packet.sender)
+            if isinstance(packet.sender, list)
+            else (packet.sender,)
+        )
+
+        # For Ventilairsec MSC packets, we always know the profile
+        rorg_manuf_val = getattr(packet, "rorg_manufacturer", None)
+        if packet.rorg == RORG.MSC and rorg_manuf_val == 0x079:
+            # Ventilairsec devices use 0xD1079 profile
+            profile = {"rorg": 0xD1079, "func": 0x01, "type": 0x00}
+            # Register for future packets if not already registered
+            if device_key not in self._device_profiles:
+                self._device_profiles[device_key] = profile
+        else:
+            # Look up profile for this device
+            profile = self._device_profiles.get(device_key)
+
+        if not profile:
+            # No known profile for this device yet
+            return
+
+        # Extract command if present (for MSC and VLD packets)
+        command = getattr(packet, "cmd", None)
+
+        try:
+            # Create parser with the device's EEP profile
+            parser = Parser(
+                rorg=profile["rorg"], func=profile["func"], type_=profile["type"]
+            )
+            parsed_result = parser.parse_packet(packet.data, command=command)
+
+            if parsed_result:
+                packet.parsed = parsed_result
+        except (ValueError, TypeError, OSError) as err:
+            _LOGGER.debug(
+                "Failed to parse packet from %s: %s",
+                format_device_id_hex(packet.sender)
+                if isinstance(packet.sender, list)
+                else packet.sender,
+                err,
+            )
+
     def _process_ventilairsec_sensors(self, packet):
         """Process sensors from Ventilairsec MSC Command 8 (Capteurs détectés).
 
-        This method extracts sensor information from MSC packets with command 8
-        and creates discovery signals for each detected sensor.
+        This method extracts sensor information from already-parsed MSC packets
+        with command 8 and creates discovery signals for each detected sensor.
 
         Args:
-            packet: EnOcean RadioPacket with parsed data
+            packet: EnOcean RadioPacket with parsed data (already parsed by _parse_packet_by_profile)
         """
-        # Check if this is a Ventilairsec MSC packet (0xD1079, func=0x01)
-        rorg_manufacturer_val = getattr(packet, "rorg_manufacturer", None)
-        if packet.rorg != RORG.MSC or rorg_manufacturer_val != 0x079:
+        # Only process Ventilairsec MSC command 8 packets (sensor discovery)
+        rorg_manuf_val = getattr(packet, "rorg_manufacturer", None)
+        if (
+            packet.rorg != RORG.MSC
+            or rorg_manuf_val != 0x079
+            or packet.cmd != 8
+            or not packet.parsed
+        ):
             return
 
         parent_device_id = packet.sender
-
-        # Parse command 8 data from the packet if available
-        if not packet.parsed or packet.parsed.command != 8:
-            return
 
         # Extract sensor information from parsed packet
         try:
@@ -271,6 +346,14 @@ class EnOceanDongle:
 
             # CAPTINDEX: Sensor index (for multiple sensors)
             capt_index = packet.parsed.get("CAPTINDEX", {}).get("raw_value", 0)
+
+            _LOGGER.debug(
+                "MSC CMD=8 extracted - sensor_id=%s, prof_app_value=%s, prof_app_desc='%s', capt_index=%s",
+                sensor_id,
+                prof_app_value,
+                prof_app_desc,
+                capt_index,
+            )
 
             # Create unique sensor key based on parent device + sensor ID
             # Convert parent_device_id to tuple of ints for hashable key
@@ -320,6 +403,31 @@ class EnOceanDongle:
 
             # Convert sensor_id integer to list of 4 bytes for consistency with packet.sender format
             sensor_id_bytes = [(sensor_id >> (i * 8)) & 0xFF for i in range(4)]
+
+            # Parse EEP profile strings to integers
+            try:
+                rorg_int = (
+                    int(eep_profile["rorg"], 16)
+                    if isinstance(eep_profile["rorg"], str)
+                    else eep_profile["rorg"]
+                )
+                func_int = (
+                    int(eep_profile["func"], 16)
+                    if isinstance(eep_profile["func"], str)
+                    else eep_profile["func"]
+                )
+                type_int = (
+                    int(eep_profile["type"], 16)
+                    if isinstance(eep_profile["type"], str)
+                    else eep_profile["type"]
+                )
+            except (ValueError, KeyError):
+                rorg_int = 0
+                func_int = 0
+                type_int = 0
+
+            # Register the sensor's EEP profile for future packet parsing
+            self.register_device_profile(sensor_id_bytes, rorg_int, func_int, type_int)
 
             discovery_info: DiscoveryInfo = {
                 "device_id": sensor_id_bytes,

@@ -109,8 +109,6 @@ def _extract_eep_fields(
     containers = data_commands if data_commands else [profile]
 
     for container in containers:  # pylint: disable=too-many-nested-blocks
-        command_id = container.get("command") if hasattr(container, "get") else None
-
         # Extract value, enum, and boolean fields
         for field_type in ("value", "enum", "boolean"):
             for element in container.find_all(field_type, recursive=False):
@@ -179,7 +177,7 @@ def _extract_eep_fields(
                         size = int(size_el.text.strip(), 0)
                 fields.append(
                     EEPEntityDef(
-                        name=description,
+                        description=description,
                         rorg=rorg,
                         rorg_func=rorg_func,
                         rorg_type=rorg_type,
@@ -196,9 +194,7 @@ def _extract_eep_fields(
                             if items
                             else None
                         ),
-                        command=command_id,
                         offset=offset,
-                        size=size,
                     )
                 )
 
@@ -349,9 +345,33 @@ def _overlay_mapping_overrides(
             mapping_def = mapping_lookup[data_field]
             config = mapping_def.get("config", {})
 
+            _LOGGER.debug(
+                "Applying mapping override for %s: component=%s -> %s",
+                data_field,
+                mapping_def.get("component"),
+                eep_entity.entity_type,
+            )
+
             # Apply mapping overrides
             if mapping_def.get("component"):
-                eep_entity.entity_type = mapping_def["component"]
+                component_str = mapping_def["component"]
+                # Convert string component to EntityType enum
+                try:
+                    old_type = eep_entity.entity_type
+                    eep_entity.entity_type = EntityType(component_str)
+                    _LOGGER.debug(
+                        "Overrode entity type for %s from %s to %s",
+                        data_field,
+                        old_type,
+                        eep_entity.entity_type,
+                    )
+                except ValueError:
+                    _LOGGER.warning(
+                        "Unknown component type '%s' in mapping for %s, keeping auto-classified %s",
+                        component_str,
+                        data_field,
+                        eep_entity.entity_type,
+                    )
 
             if config.get("unit_of_measurement"):
                 eep_entity.unit = config["unit_of_measurement"]

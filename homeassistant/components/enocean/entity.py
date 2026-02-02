@@ -220,13 +220,6 @@ async def async_create_entities_from_eep(
         )
         return
 
-    LOGGER.debug(
-        "async_create_entities_from_eep called for platform %s with %d entities for device %s",
-        platform_type,
-        len(entities_list),
-        format_device_id_hex(device_id),
-    )
-
     device_registry = dr.async_get(hass)
     device_entry = device_registry.async_get_device(
         identifiers={("enocean", format_device_id_hex_underscore(device_id))}

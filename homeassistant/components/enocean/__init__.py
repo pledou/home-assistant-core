@@ -225,12 +225,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                     list(platform_callbacks.keys()),
                 )
                 for platform_name, callback in platform_callbacks.items():
-                    _LOGGER.debug(
-                        "Calling callback for platform %s with %d entities for device %s",
-                        platform_name,
-                        len(entities),
-                        format_device_id_hex(device_id),
-                    )
                     try:
                         await callback(
                             device_id,
@@ -238,11 +232,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                             rorg,
                             rorg_func,
                             rorg_type,
-                        )
-                        _LOGGER.debug(
-                            "Platform callback %s completed for device %s",
-                            platform_name,
-                            format_device_id_hex(device_id),
                         )
                     except (
                         TimeoutError,

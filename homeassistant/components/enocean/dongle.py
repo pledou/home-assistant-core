@@ -329,18 +329,15 @@ class EnOceanDongle:
                 return
 
             # PROFAPP: Sensor profile (enum: 1=MSC, 2=A5_04_01, 3=A5_09_04, 4=D2_04_08)
-            prof_app_data = packet.parsed.get("PROFAPP", {})
-            prof_app_value = prof_app_data.get("raw_value")
-            prof_app_desc = prof_app_data.get("value", "Unknown")
+            prof_app_value = packet.parsed.get("PROFAPP", {})
 
             # CAPTINDEX: Sensor index (for multiple sensors)
             capt_index = packet.parsed.get("CAPTINDEX", {})
 
             _LOGGER.debug(
-                "MSC CMD=8 extracted - sensor_id=%s, prof_app_value=%s, prof_app_desc='%s', capt_index=%s",
+                "MSC CMD=8 extracted - sensor_id=%s, prof_app_value=%s, capt_index=%s",
                 sensor_id,
                 prof_app_value,
-                prof_app_desc,
                 capt_index,
             )
 
@@ -376,7 +373,7 @@ class EnOceanDongle:
                 if isinstance(parent_device_id, list)
                 else parent_device_id,
                 f"{sensor_id:08X}",
-                prof_app_desc,
+                device_type,
                 capt_index,
             )
 

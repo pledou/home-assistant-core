@@ -1,6 +1,7 @@
 """Representation of an EnOcean device."""
 
 import inspect
+from typing import Any
 
 from enocean.protocol.eep_metadata import load_eep_fields
 from enocean.protocol.packet import Packet
@@ -12,7 +13,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect, dispatche
 from homeassistant.helpers.entity import Entity
 
 from .const import DOMAIN, LOGGER, SIGNAL_RECEIVE_MESSAGE, SIGNAL_SEND_MESSAGE
-from .types import EEPEntityDef
+from .types import EEPEntityDef, EntityType
 
 
 class EnOceanEntity(Entity):
@@ -178,6 +179,103 @@ class DynamicEnoceanEntity(EnOceanEntity):
             return field_data
 
 
+async def _build_eep_fields_obj(
+    hass: HomeAssistant,
+    ent,
+    fields,
+    rorg: int,
+    rorg_func: int,
+    rorg_type: int,
+    unique_id: str,
+) -> EEPEntityDef | None:
+    """Build EEPEntityDef from loaded EEP fields metadata.
+
+    Converts fields returned by load_eep_fields into an EEPEntityDef dataclass
+    for consistent access to min_value, max_value, unit across different formats.
+    """
+    fields_obj = None
+    try:
+        if not fields:
+            return None
+
+        # Attempt to locate metadata for the specific data_field
+        meta = None
+        if isinstance(fields, dict):
+            # try direct key, then uppercase key
+            meta = fields.get(ent.data_field) or fields.get(ent.data_field.upper())
+        else:
+            # If it's an object, try attribute access
+            meta = getattr(fields, ent.data_field, None)
+
+        # Extract min/max/unit values based on meta type
+        min_v, max_v, unit_v, enum_opts, offset_v = _extract_field_metadata(meta)
+
+        # Normalize entity_type
+        entity_type = _normalize_entity_type(ent)
+
+        fields_obj = EEPEntityDef(
+            description=ent.description,
+            rorg=rorg,
+            rorg_func=rorg_func,
+            rorg_type=rorg_type,
+            data_field=ent.data_field,
+            entity_type=entity_type,
+            unit=unit_v or ent.unit,
+            device_class=ent.device_class,
+            min_value=(None if min_v is None else float(min_v)),
+            max_value=(None if max_v is None else float(max_v)),
+            enum_options=enum_opts or ent.enum_options,
+            offset=offset_v,
+        )
+    except (AttributeError, KeyError, TypeError, ValueError) as err:
+        # Log at debug level and leave fields_obj as None if metadata
+        # extraction or conversion fails
+        LOGGER.debug(
+            "Failed to build fields_obj for %s: %s",
+            unique_id,
+            err,
+        )
+        fields_obj = None
+
+    return fields_obj
+
+
+def _extract_field_metadata(meta):
+    """Extract min_v, max_v, unit_v, enum_opts, offset_v from metadata."""
+    min_v = max_v = unit_v = enum_opts = offset_v = None
+
+    if meta and isinstance(meta, dict):
+        min_v = meta.get("min_value") or meta.get("min") or meta.get("minimum")
+        max_v = meta.get("max_value") or meta.get("max") or meta.get("maximum")
+        unit_v = meta.get("unit") or meta.get("units")
+        enum_opts = meta.get("enum_options") or meta.get("enum")
+        offset_v = meta.get("offset")
+    elif meta:
+        # If meta is not a dict, try attribute names
+        min_v = getattr(meta, "min_value", None)
+        max_v = getattr(meta, "max_value", None)
+        unit_v = getattr(meta, "unit", None)
+        enum_opts = getattr(meta, "enum_options", None)
+        offset_v = getattr(meta, "offset", None)
+
+    return min_v, max_v, unit_v, enum_opts, offset_v
+
+
+def _normalize_entity_type(ent) -> EntityType:
+    """Normalize entity_type to EntityType enum."""
+    entity_type = getattr(ent, "entity_type", EntityType.SENSOR)
+    if entity_type is None:
+        entity_type = EntityType.SENSOR
+    elif isinstance(entity_type, str):
+        # Convert string to EntityType enum
+        try:
+            entity_type = EntityType(entity_type)
+        except ValueError:
+            entity_type = EntityType.SENSOR
+
+    return entity_type
+
+
 async def async_create_entities_from_eep(
     hass: HomeAssistant,
     config_entry,
@@ -283,6 +381,11 @@ async def async_create_entities_from_eep(
                 f"0x{rorg_type:02X}",
             )
 
+            # Build fields_obj from loaded fields
+            fields_obj = await _build_eep_fields_obj(
+                hass, ent, fields, rorg, rorg_func, rorg_type, unique_id
+            )
+
             # Build entity kwargs
             entity_kwargs = {
                 "data_field": ent.data_field,
@@ -290,7 +393,7 @@ async def async_create_entities_from_eep(
                 "rorg": rorg,
                 "rorg_func": rorg_func,
                 "rorg_type": rorg_type,
-                "fields": fields,
+                "fields": fields_obj or fields,
             }
 
             if attr_name:
@@ -321,7 +424,7 @@ async def async_create_entities_from_eep(
                 params = []
                 param_names = []
 
-            positional_args = []
+            positional_args: list[int | str | EEPEntityDef | Any] = []
             # If the constructor expects a first parameter like 'dev_id',
             # pass the device_id positionally
             if param_names and param_names[0] in ("dev_id"):

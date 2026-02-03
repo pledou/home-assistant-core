@@ -1,5 +1,19 @@
 0xD2:
   0x01:
+    0x00:
+      device_config:
+        command: "CMD"
+        channel: "CMD"
+        log_learn: ""
+        direction: ""
+        answer: ""
+      entities:
+        - component: "number"
+          name: "setpoint"
+          config:
+            min_value: 0
+            max_value: 100
+            unit: "%"
     0x01:
       device_config:
         command: "CMD"
@@ -275,110 +289,111 @@
 
 0xD1079:
   0x01:
-    device_config:
-      command: "CMD"
-      channel: "CMD"
-      log_learn: ""
-      direction: ""
-      answer: ""
-    entities:
-      - component: sensor
-        name: "TEMPCELEC"
-        config:
-          state_topic: "CMD0"
-          value_template: "{{ value_json.CMD0_TEMPCELEC }}"
-          unit_of_measurement: "°C"
-          device_class: "temperature"
-          state_class: "measurement"
-      - component: sensor
-        name: "TEMPMSOUFFL"
-        config:
-          state_topic: "CMD0"
-          value_template: "{{ value_json.CMD0_TEMPMSOUFFL }}"
-          unit_of_measurement: "°C"
-          device_class: "temperature"
-          state_class: "measurement"
-      - component: sensor
-        name: "TEMPCHYDROR"
-        config:
-          state_topic: "CMD0"
-          value_template: "{{ value_json.CMD0_TEMPCHYDROR }}"
-          unit_of_measurement: "°C"
-          device_class: "temperature"
-          state_class: "measurement"
-      - component: sensor
-        name: "TEMPSOL"
-        config:
-          state_topic: "CMD0"
-          value_template: "{{ value_json.CMD0_TEMPSOL }}"
-          unit_of_measurement: "°C"
-          device_class: "temperature"
-          state_class: "measurement"
-      - component: switch
-        name: "SURV"
-        config:
-          state_topic: "CMD0"
-          value_template: "{% if value_json.CMD0_SURV == 1 %}ON{% else %}OFF{% endif %}"
-          command_topic: "req"
-          payload_on: "1"
-          payload_off: "0"
-      - component: switch
-        name: "DEBF"
-        config:
-          state_topic: "CMD0"
-          value_template: "{% if value_json.CMD0_DEBF == 1 %}ON{% else %}OFF{% endif %}"
-          command_topic: "req"
-          payload_on: "1"
-          payload_off: "0"
-      - component: number
-        name: "BOOS"
-        config:
-          state_topic: "CMD0"
-          value_template: "{{ value_json.CMD0_BOOS }}"
-          unit_of_measurement: "min"
-          min: "0"
-          max: "200"
-          step: "1"
-          mode: "box"
-          command_topic: "req"
-          command_template: >-
-            {"CMD":"0","BOOST":{{value}}, "send":"clear"}
-      - component: number
-        name: "VACS"
-        config:
-          state_topic: "CMD0"
-          value_template: "{{ value_json.CMD0_VAC }}"
-          unit_of_measurement: "d"
-          min: "0"
-          max: "365"
-          step: "1"
-      - component: sensor
-        name: "TYCAIS"
-        config:
-          state_topic: "CMD0"
-          value_template: "{{ value_json.TYCAIS }}"
-      - component: sensor
-        name: "CERR2"
-        config:
-          state_topic: "CMD3"
-          value_template: "{{ value_json.CERR2 }}"
-      - component: sensor
-        name: "ETATS"
-        config:
-          state_topic: "CMD1"
-          value_template: "{{ value_json.ETATS }}"
-      - component: sensor
-        name: "SAIS"
-        config:
-          state_topic: "CMD0"
-          value_template: "{{ value_json.SAIS }}"
-      - component: sensor
-        name: "BYP"
-        config:
-          state_topic: "CMD0"
-          value_template: "{{ value_json.BYP }}"
-      - component: sensor
-        name: "LOC"
-        config:
-          state_topic: "CMD0"
-          value_template: "{{ value_json.LOC }}"
+    0x00:
+      device_config:
+        command: "CMD"
+        channel: "CMD"
+        log_learn: ""
+        direction: ""
+        answer: ""
+      entities:
+        - component: sensor
+          name: "TEMPCELEC"
+          config:
+            state_topic: "CMD0"
+            value_template: "{{ value_json.CMD0_TEMPCELEC }}"
+            unit_of_measurement: "°C"
+            device_class: "temperature"
+            state_class: "measurement"
+        - component: sensor
+          name: "TEMPMSOUFFL"
+          config:
+            state_topic: "CMD0"
+            value_template: "{{ value_json.CMD0_TEMPMSOUFFL }}"
+            unit_of_measurement: "°C"
+            device_class: "temperature"
+            state_class: "measurement"
+        - component: sensor
+          name: "TEMPCHYDROR"
+          config:
+            state_topic: "CMD0"
+            value_template: "{{ value_json.CMD0_TEMPCHYDROR }}"
+            unit_of_measurement: "°C"
+            device_class: "temperature"
+            state_class: "measurement"
+        - component: sensor
+          name: "TEMPSOL"
+          config:
+            state_topic: "CMD0"
+            value_template: "{{ value_json.CMD0_TEMPSOL }}"
+            unit_of_measurement: "°C"
+            device_class: "temperature"
+            state_class: "measurement"
+        - component: switch
+          name: "SURV"
+          config:
+            state_topic: "CMD0"
+            value_template: "{% if value_json.CMD0_SURV == 1 %}ON{% else %}OFF{% endif %}"
+            command_topic: "req"
+            payload_on: "1"
+            payload_off: "0"
+        - component: switch
+          name: "DEBF"
+          config:
+            state_topic: "CMD0"
+            value_template: "{% if value_json.CMD0_DEBF == 1 %}ON{% else %}OFF{% endif %}"
+            command_topic: "req"
+            payload_on: "1"
+            payload_off: "0"
+        - component: number
+          name: "BOOS"
+          config:
+            state_topic: "CMD0"
+            value_template: "{{ value_json.CMD0_BOOS }}"
+            unit_of_measurement: "min"
+            min: "0"
+            max: "200"
+            step: "1"
+            mode: "box"
+            command_topic: "req"
+            command_template: >-
+              {"CMD":"0","BOOST":{{value}}, "send":"clear"}
+        - component: number
+          name: "VACS"
+          config:
+            state_topic: "CMD0"
+            value_template: "{{ value_json.CMD0_VAC }}"
+            unit_of_measurement: "d"
+            min: "0"
+            max: "365"
+            step: "1"
+        - component: sensor
+          name: "TYCAIS"
+          config:
+            state_topic: "CMD0"
+            value_template: "{{ value_json.TYCAIS }}"
+        - component: sensor
+          name: "CERR2"
+          config:
+            state_topic: "CMD3"
+            value_template: "{{ value_json.CERR2 }}"
+        - component: sensor
+          name: "ETATS"
+          config:
+            state_topic: "CMD1"
+            value_template: "{{ value_json.ETATS }}"
+        - component: sensor
+          name: "SAIS"
+          config:
+            state_topic: "CMD0"
+            value_template: "{{ value_json.SAIS }}"
+        - component: sensor
+          name: "BYP"
+          config:
+            state_topic: "CMD0"
+            value_template: "{{ value_json.BYP }}"
+        - component: sensor
+          name: "LOC"
+          config:
+            state_topic: "CMD0"
+            value_template: "{{ value_json.LOC }}"

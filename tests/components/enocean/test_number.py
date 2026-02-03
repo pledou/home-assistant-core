@@ -39,8 +39,8 @@ def test_number_defaults_when_no_min_max_unit() -> None:
         fields=None,
     )
 
-    assert num._attr_native_min_value is None
-    assert num._attr_native_max_value is None
+    assert getattr(num, "_attr_native_min_value", None) is None
+    assert getattr(num, "_attr_native_max_value", None) is None
     assert num._attr_native_unit_of_measurement is None
 
 
@@ -48,10 +48,11 @@ def test_number_extracts_min_max_unit_from_fields() -> None:
     """Ensure min, max and unit are extracted from provided EEP fields."""
     dev_id = [0x0E, 0x0F, 0x10, 0x11]
     fields = EEPEntityDef(
-        name="level",
+        description="level",
         rorg=0xF6,
         rorg_func=0x02,
         rorg_type=0x01,
+        data_field="level",
         entity_type=EntityType.NUMBER,
         min_value=0,
         max_value=100,

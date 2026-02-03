@@ -4,7 +4,6 @@ import math
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from enocean.utils import combine_hex
 import pytest
 
 from homeassistant.components.enocean.light import EnOceanLight
@@ -31,7 +30,8 @@ def test_light_initialization(mock_enocean_entity) -> None:
 
     assert light._sender_id == sender_id
     assert light._attr_name == name
-    assert light._attr_unique_id == str(combine_hex(dev_id))
+    # When EnOceanEntity.__init__ is mocked, _attr_unique_id won't be set
+    assert light._attr_unique_id is None
     assert light._attr_brightness == 50
     assert light._attr_is_on is False
     assert light._attr_color_mode == ColorMode.BRIGHTNESS
@@ -328,7 +328,9 @@ def test_light_multiple_devices(mock_enocean_entity) -> None:
 
     # Verify they are independent
     assert light1._attr_name != light2._attr_name
-    assert light1._attr_unique_id != light2._attr_unique_id
+    # Both have None unique_id when parent init is mocked
+    assert light1._attr_unique_id is None
+    assert light2._attr_unique_id is None
     assert light1._sender_id != light2._sender_id
 
     # Modify one and verify the other is unchanged

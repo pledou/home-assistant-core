@@ -134,22 +134,6 @@ class DynamicEnOceanNumber(DynamicEnoceanEntity, EnOceanNumber):
             attr_name=attr_name,
         )
         # Set number-specific attributes
-        self._attr_native_min_value = (
-            min_value
-            if min_value is not None
-            else (fields.min_value if fields and fields.min_value is not None else 0.0)
-        )
-        self._attr_native_max_value = (
-            max_value
-            if max_value is not None
-            else (
-                fields.max_value if fields and fields.max_value is not None else 100.0
-            )
-        )
-        self._attr_native_unit_of_measurement = unit or (
-            fields.unit if fields else None
-        )
-
         # Extract from provided fields metadata when available
         extracted_min = None
         extracted_max = None
@@ -160,16 +144,18 @@ class DynamicEnOceanNumber(DynamicEnoceanEntity, EnOceanNumber):
                 extracted_min = fields.min_value
                 extracted_max = fields.max_value
                 extracted_unit = fields.unit
-        self._attr_native_min_value = (
-            min_value
-            if min_value is not None
-            else (extracted_min if extracted_min is not None else 0.0)
-        )
-        self._attr_native_max_value = (
-            max_value
-            if max_value is not None
-            else (extracted_max if extracted_max is not None else 100.0)
-        )
+
+        # Use provided min/max/unit, fall back to extracted values, then None
+        if min_value is not None:
+            self._attr_native_min_value = min_value
+        elif extracted_min is not None:
+            self._attr_native_min_value = extracted_min
+
+        if max_value is not None:
+            self._attr_native_max_value = max_value
+        elif extracted_max is not None:
+            self._attr_native_max_value = extracted_max
+
         self._attr_native_unit_of_measurement = (
             unit if unit is not None else extracted_unit
         )

@@ -11,6 +11,7 @@ from enocean.protocol.packet import RadioPacket
 from enocean.protocol.parser import Parser
 import serial
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, dispatcher_send
 
@@ -31,7 +32,12 @@ class EnOceanDongle:
     creating devices if needed, and dispatching messages to platforms.
     """
 
-    def __init__(self, hass: HomeAssistant, serial_path: str) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        serial_path: str,
+        config_entry: ConfigEntry | None = None,
+    ) -> None:
         """Initialize the EnOcean dongle."""
 
         self._communicator = SerialCommunicator(
@@ -41,6 +47,7 @@ class EnOceanDongle:
         self.serial_path = serial_path
         self.identifier = basename(normpath(serial_path))
         self.hass = hass
+        self.config_entry = config_entry
         self.dispatcher_disconnect_handle = None
         self._discovered_sensors: dict = {}  # Track discovered sensors by (parent_id, sensor_id)
         self._device_profiles: dict[
@@ -57,6 +64,9 @@ class EnOceanDongle:
         # Pre-fetch base ID to avoid deadlock when UTE teach-in arrives
         # This must be done after start() so the communicator thread is running
         await self.hass.async_add_executor_job(self._fetch_base_id)
+
+        # Load previously learned device profiles from config entry storage
+        await self._async_load_device_profiles()
 
         self.dispatcher_disconnect_handle = async_dispatcher_connect(
             self.hass, SIGNAL_SEND_MESSAGE, self._send_message_callback
@@ -255,12 +265,67 @@ class EnOceanDongle:
             func,
             type_,
         )
+        # Persist the profile to config entry storage
+        if self.config_entry:
+            self._async_save_device_profiles()
+
+    async def _async_load_device_profiles(self) -> None:
+        """Load device profiles from config entry storage.
+
+        Device profiles are stored in config_entry.runtime_data to survive
+        Home Assistant restarts, ensuring that previously learned MSC devices
+        can be parsed correctly when the integration is reloaded.
+        """
+        if not self.config_entry or not hasattr(self.config_entry, "runtime_data"):
+            return
+
+        stored_profiles = self.config_entry.runtime_data.get("device_profiles", {})
+
+        # Convert string keys back to tuples of ints
+        for device_key_str, profile in stored_profiles.items():
+            try:
+                # Parse the string representation of device key tuple back to tuple of ints
+                device_key = tuple(int(x) for x in device_key_str.split(","))
+                self._device_profiles[device_key] = profile
+                _LOGGER.debug(
+                    "Loaded persisted EEP profile for device %s: rorg=0x%02X func=0x%02X type=0x%02X",
+                    format_device_id_hex(list(device_key)),
+                    profile.get("rorg", 0),
+                    profile.get("func", 0),
+                    profile.get("type", 0),
+                )
+            except (ValueError, KeyError) as err:
+                _LOGGER.warning(
+                    "Failed to load device profile %s: %s", device_key_str, err
+                )
+
+    def _async_save_device_profiles(self) -> None:
+        """Save device profiles to config entry storage.
+
+        Persists all known device profiles to config_entry.runtime_data
+        so they survive Home Assistant restarts.
+        """
+        if not self.config_entry or not hasattr(self.config_entry, "runtime_data"):
+            return
+
+        # Convert device keys (tuples) to string representation for JSON storage
+        profiles_to_save = {}
+        for device_key, profile in self._device_profiles.items():
+            key_str = ",".join(str(x) for x in device_key)
+            profiles_to_save[key_str] = profile
+
+        self.config_entry.runtime_data["device_profiles"] = profiles_to_save
+        _LOGGER.debug(
+            "Persisted %d device profiles to config entry storage",
+            len(profiles_to_save),
+        )
 
     def _parse_packet_by_profile(self, packet):
         """Parse packet systematically based on known device EEP profile.
 
         This ensures packet.parsed is populated before dispatching to entities.
         If the device profile is known, creates a parser and parses the packet data.
+        For reconstructed packets, ensures EEP data is parsed when profile is available.
 
         Args:
             packet: EnOcean RadioPacket to parse
@@ -279,6 +344,11 @@ class EnOceanDongle:
             # No known profile for this device yet
             return
 
+        # Check if this is a reconstructed packet that needs EEP parsing
+        is_reconstructed = (
+            isinstance(packet.parsed, dict) and "reconstructed" in packet.parsed
+        )
+
         # Extract command if present (for MSC and VLD packets)
         command = getattr(packet, "cmd", None)
 
@@ -291,6 +361,27 @@ class EnOceanDongle:
 
             if parsed_result:
                 packet.parsed = parsed_result
+                if is_reconstructed:
+                    _LOGGER.debug(
+                        "Parsed reconstructed packet from %s: %s",
+                        format_device_id_hex(packet.sender)
+                        if isinstance(packet.sender, list)
+                        else packet.sender,
+                        list(parsed_result.keys()) if parsed_result else "empty",
+                    )
+            elif is_reconstructed:
+                # Log when we fail to parse a reconstructed packet
+                _LOGGER.debug(
+                    "Parser returned no data for reconstructed packet from %s "
+                    "(rorg=0x%02X, func=0x%02X, type=0x%02X, cmd=%s)",
+                    format_device_id_hex(packet.sender)
+                    if isinstance(packet.sender, list)
+                    else packet.sender,
+                    profile["rorg"],
+                    profile["func"],
+                    profile["type"],
+                    command,
+                )
         except (ValueError, TypeError, OSError) as err:
             _LOGGER.debug(
                 "Failed to parse packet from %s: %s",

@@ -65,7 +65,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         _LOGGER.warning("Config entry has no device path, skipping setup")
         return False
 
-    usb_dongle = EnOceanDongle(hass, config_entry.data[CONF_DEVICE])
+    # Initialize runtime_data if needed for device profile persistence
+    if not hasattr(config_entry, "runtime_data") or config_entry.runtime_data is None:
+        config_entry.runtime_data = {}
+
+    usb_dongle = EnOceanDongle(hass, config_entry.data[CONF_DEVICE], config_entry)
     await usb_dongle.async_setup()
     enocean_data[ENOCEAN_DONGLE] = usb_dongle
 

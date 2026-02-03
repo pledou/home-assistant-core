@@ -105,7 +105,14 @@ def _extract_eep_fields(
     fields = []
 
     # Check for multi-command profiles (contain <data command="..."> elements)
-    data_commands = profile.find_all("data")
+    # If the profile itself is a <data> element, we need to get its siblings
+    if profile.name == "data" and profile.parent:
+        # Profile is already a <data> element, get all sibling <data> elements from parent
+        data_commands = profile.parent.find_all("data")
+    else:
+        # Profile is a <profile> element, find nested <data> elements
+        data_commands = profile.find_all("data")
+
     containers = data_commands if data_commands else [profile]
 
     for container in containers:  # pylint: disable=too-many-nested-blocks

@@ -274,7 +274,7 @@
             payload_off: "1"
 
 0xD1079:
-  0x00:
+  0x01:
     device_config:
       command: "CMD"
       channel: "CMD"

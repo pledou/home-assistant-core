@@ -219,11 +219,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 )
                 # Call registered platform callbacks directly to add entities
                 platform_callbacks = enocean_data.get("platform_callbacks", {})
-                _LOGGER.debug(
-                    "Found %d platform callbacks: %s",
-                    len(platform_callbacks),
-                    list(platform_callbacks.keys()),
-                )
                 for platform_name, callback in platform_callbacks.items():
                     try:
                         await callback(

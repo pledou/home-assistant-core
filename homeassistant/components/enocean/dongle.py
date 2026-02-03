@@ -272,17 +272,8 @@ class EnOceanDongle:
             else (packet.sender,)
         )
 
-        # For Ventilairsec MSC packets, we always know the profile
-        rorg_manuf_val = getattr(packet, "rorg_manufacturer", None)
-        if packet.rorg == RORG.MSC and rorg_manuf_val == 0x079:
-            # Ventilairsec devices use 0xD1079 profile
-            profile = {"rorg": 0xD1079, "func": 0x01, "type": 0x00}
-            # Register for future packets if not already registered
-            if device_key not in self._device_profiles:
-                self._device_profiles[device_key] = profile
-        else:
-            # Look up profile for this device
-            profile = self._device_profiles.get(device_key)
+        # Look up profile for this device
+        profile = self._device_profiles.get(device_key)
 
         if not profile:
             # No known profile for this device yet

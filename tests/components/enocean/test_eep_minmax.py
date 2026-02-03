@@ -2,7 +2,7 @@
 
 from bs4 import BeautifulSoup
 
-from homeassistant.components.enocean.eep_devices import load_device_profile_from_packet
+from homeassistant.components.enocean.eep_devices import _extract_eep_fields
 
 
 def test_extract_min_max_from_scale_and_range() -> None:
@@ -35,15 +35,9 @@ def test_extract_min_max_from_scale_and_range() -> None:
     soup = BeautifulSoup(xml, "xml")
     profile_el = soup.find("profile")
 
-    packet = {
-        "rorg": 0xD1,
-        "rorg_func": 0x07,
-        "rorg_type": 0x09,
-        "eep_profile": profile_el,
-    }
-
-    prof = load_device_profile_from_packet(packet)
-    assert prof is not None
+    # Directly test _extract_eep_fields with the profile element
+    prof = _extract_eep_fields(profile_el, rorg=0xD1, rorg_func=0x07, rorg_type=0x09)
+    assert prof is not None and len(prof) > 0
     # Find our field
     target = None
     for f in prof:

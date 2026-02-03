@@ -2,6 +2,7 @@
 
 from collections.abc import Awaitable, Callable
 import logging
+from typing import cast
 
 from enocean.protocol.eep import get_eep as _get_eep
 import voluptuous as vol
@@ -15,7 +16,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import DATA_ENOCEAN, DOMAIN, ENOCEAN_DONGLE, PLATFORMS
 from .dongle import SIGNAL_DISCOVER_DEVICE, EnOceanDongle
-from .eep_devices import load_device_profile_from_packet
+from .eep_devices import get_entities_for_device
 from .entity import format_device_id_hex, format_device_id_hex_underscore
 from .types import DiscoveryInfo, EEPEntityDef, EepProfile
 
@@ -174,20 +175,21 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 rorg_type,
             )
 
-            # Load and populate entities from the resolved EEP profile object
-            eep_profile_data = await hass.async_add_executor_job(
-                load_device_profile_from_packet,
-                {
-                    "rorg": rorg,
-                    "rorg_func": rorg_func,
-                    "rorg_type": rorg_type,
-                    "eep_profile": profile,
-                },
+            # Load and populate entities from the resolved EEP profile with YAML mapping overlays
+            entities = await hass.async_add_executor_job(
+                get_entities_for_device,
+                cast(
+                    EepProfile,
+                    {
+                        "rorg": rorg,
+                        "rorg_func": rorg_func,
+                        "rorg_type": rorg_type,
+                        "manufacturer": eep_profile.get("manufacturer"),
+                    },
+                ),
             )
 
-            if eep_profile_data:
-                entities = eep_profile_data
-
+            if entities:
                 # Register device EEP profile with dongle for systematic packet parsing
                 usb_dongle.register_device_profile(
                     device_id, rorg, rorg_func, rorg_type

@@ -391,28 +391,3 @@ def _overlay_mapping_overrides(
                 eep_entity.enum_options = config["options"]
 
     return eep_entities
-
-
-def load_device_profile_from_packet(packet_data: dict) -> list[EEPEntityDef] | None:
-    """Extract EEP profile fields from parsed enocean packet.
-
-    Used by tests and discovery to extract and analyze EEP fields.
-
-    Args:
-        packet_data: Packet dict with 'rorg', 'rorg_func', 'rorg_type', 'eep_profile' keys
-
-    Returns: List of EEPEntityDef or None if invalid.
-    """
-    rorg = packet_data.get("rorg")
-    func = packet_data.get("rorg_func")
-    rorg_type = packet_data.get("rorg_type")
-    profile_obj = packet_data.get("eep_profile")
-
-    if any(v is None for v in (rorg, func, rorg_type, profile_obj)):
-        return None
-
-    # Ensure all values are integers (mypy requires this)
-    assert isinstance(rorg, int)
-    assert isinstance(func, int)
-    assert isinstance(rorg_type, int)
-    return _extract_eep_fields(profile_obj, rorg, func, rorg_type)

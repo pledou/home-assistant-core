@@ -26,7 +26,7 @@ from homeassistant.const import (
     UnitOfPower,
     UnitOfTemperature,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -197,6 +197,7 @@ class EnOceanTemperatureSensor(EnOceanSensor):
         self.range_from = range_from
         self.range_to = range_to
 
+    @callback
     def value_changed(self, packet):
         """Update the internal state of the sensor."""
         if packet.data[0] != 0xA5:
@@ -219,6 +220,7 @@ class EnOceanHumiditySensor(EnOceanSensor):
     - A5-10-10 to A5-10-14 (Room Operating Panels)
     """
 
+    @callback
     def value_changed(self, packet):
         """Update the internal state of the sensor."""
         if packet.rorg != 0xA5:
@@ -235,6 +237,7 @@ class EnOceanWindowHandle(EnOceanSensor):
     - F6-10-00 (Mechanical handle / Hoppe AG)
     """
 
+    @callback
     def value_changed(self, packet):
         """Update the internal state of the sensor."""
         action = (packet.data[1] & 0x70) >> 4

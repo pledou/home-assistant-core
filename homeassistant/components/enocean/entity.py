@@ -7,7 +7,7 @@ from typing import Any
 from enocean.protocol.eep_metadata import load_eep_fields
 from enocean.protocol.packet import Packet
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, dispatcher_send
@@ -59,6 +59,7 @@ class EnOceanEntity(Entity):
             )
         )
 
+    @callback
     def _message_received_callback(self, packet):
         """Handle incoming packets."""
 
@@ -79,6 +80,7 @@ class EnOceanEntity(Entity):
         if packet.sender_int == sender_int_expected:
             self.value_changed(packet)
 
+    @callback
     def value_changed(self, packet):
         """Update the internal state of the device when a packet arrives."""
 

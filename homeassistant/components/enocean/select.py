@@ -13,7 +13,7 @@ from enocean.protocol.eep_metadata import get_field_value_with_enum
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DATA_ENOCEAN, LOGGER
@@ -94,6 +94,7 @@ class EnOceanSelect(EnOceanEntity, SelectEntity):
         self._current_option = option
         self.async_write_ha_state()
 
+    @callback
     def value_changed(self, packet: Any) -> None:
         """Update current option based on incoming packet.
 
@@ -172,6 +173,7 @@ class DynamicEnOceanSelect(DynamicEnoceanEntity, EnOceanSelect):
             attr_name=attr_name,
         )
 
+    @callback
     def value_changed(self, packet: Any) -> None:
         """Update current option based on incoming packet using parser when available."""
         # Prefer packet.parsed if present

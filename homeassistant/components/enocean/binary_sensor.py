@@ -15,7 +15,7 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_DEVICE_CLASS, CONF_ID, CONF_NAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -112,6 +112,7 @@ class EnOceanBinarySensor(EnOceanEntity, BinarySensorEntity):
         self.which = -1
         self.onoff = -1
 
+    @callback
     def value_changed(self, packet):
         """Fire an event with the data that have changed.
 
@@ -207,6 +208,7 @@ class DynamicEnOceanBinarySensor(DynamicEnoceanEntity, BinarySensorEntity):
             device_class_enum = device_class
         self._attr_device_class = device_class_enum
 
+    @callback
     def value_changed(self, packet) -> None:
         """Update the internal state when a packet arrives."""
         try:

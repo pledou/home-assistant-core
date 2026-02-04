@@ -7,7 +7,7 @@ from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ID, CONF_NAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import (
@@ -180,6 +180,7 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
         )
         self._attr_is_on = False
 
+    @callback
     def value_changed(self, packet):
         """Update the internal state of the switch."""
         if packet.data[0] == 0xA5:
@@ -241,6 +242,7 @@ class DynamicEnOceanSwitch(DynamicEnoceanEntity, EnOceanSwitch):
             channel=channel,
         )
 
+    @callback
     def value_changed(self, packet):
         """Prefer parsed values via parser/fields, fallback to base implementation."""
         if not packet.data or len(packet.data) < 2:

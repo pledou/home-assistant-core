@@ -6,7 +6,7 @@ from enocean.protocol.eep_metadata import get_field_value_with_enum
 
 from homeassistant.components.number import RestoreNumber
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -160,6 +160,7 @@ class DynamicEnOceanNumber(DynamicEnoceanEntity, EnOceanNumber):
             unit if unit is not None else extracted_unit
         )
 
+    @callback
     def value_changed(self, packet) -> None:
         """Update numeric value from parsed packet when available."""
         if not packet.data or len(packet.data) < 2:

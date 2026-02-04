@@ -15,7 +15,7 @@ from homeassistant.components.light import (
     LightEntity,
 )
 from homeassistant.const import CONF_ID, CONF_NAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import (
     AddConfigEntryEntitiesCallback,
@@ -98,6 +98,7 @@ class EnOceanLight(EnOceanEntity, LightEntity):
         self.send_command(command, [], 0x01)
         self._attr_is_on = False
 
+    @callback
     def value_changed(self, packet):
         """Update the internal state of this device.
 

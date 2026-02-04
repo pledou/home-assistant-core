@@ -179,7 +179,7 @@ class DynamicEnoceanEntity(EnOceanEntity):
             return field_data
 
 
-async def _build_eep_fields_obj(
+def _build_eep_fields_obj(
     hass: HomeAssistant,
     ent,
     fields,
@@ -192,6 +192,8 @@ async def _build_eep_fields_obj(
 
     Converts fields returned by load_eep_fields into an EEPEntityDef dataclass
     for consistent access to min_value, max_value, unit across different formats.
+    This function is synchronous since it only manipulates in-memory data
+    returned by `load_eep_fields` which is executed in the executor.
     """
     fields_obj = None
     try:
@@ -199,13 +201,9 @@ async def _build_eep_fields_obj(
             return None
 
         # Attempt to locate metadata for the specific data_field
-        meta = None
-        if isinstance(fields, dict):
-            # try direct key, then uppercase key
-            meta = fields.get(ent.data_field) or fields.get(ent.data_field.upper())
-        else:
-            # If it's an object, try attribute access
-            meta = getattr(fields, ent.data_field, None)
+        # Expect `fields` to be an object-like metadata container; use
+        # attribute access to obtain the metadata for the requested field.
+        meta = getattr(fields, ent.data_field, None)
 
         # Extract min/max/unit values based on meta type
         min_v, max_v, unit_v, enum_opts, offset_v = _extract_field_metadata(meta)
@@ -381,8 +379,8 @@ async def async_create_entities_from_eep(
                 f"0x{rorg_type:02X}",
             )
 
-            # Build fields_obj from loaded fields
-            fields_obj = await _build_eep_fields_obj(
+            # Build fields_obj from loaded fields (synchronous)
+            fields_obj = _build_eep_fields_obj(
                 hass, ent, fields, rorg, rorg_func, rorg_type, unique_id
             )
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import struct
 
-from enocean.protocol.eep_metadata import get_field_value_with_enum
 import voluptuous as vol
 
 from homeassistant.components.sensor import (
@@ -323,9 +322,23 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
                 return
 
             if self._fields:
-                value = get_field_value_with_enum(
-                    packet.parsed, self._data_field, self._fields
-                )
+                # `self._fields` is expected to be an `EEPEntityDef` dataclass.
+                # Extract the raw parsed value and apply any enum mapping
+                # provided by the dataclass instead of delegating to the
+                # library function which expects a dict-like metadata object.
+                raw = self._get_parsed_value(packet, self._data_field)
+                if raw is None:
+                    value = None
+                else:
+                    enum_opts = getattr(self._fields, "enum_options", None)
+                    if enum_opts and isinstance(enum_opts, (list, tuple)):
+                        try:
+                            idx = int(raw)
+                            value = enum_opts[idx] if 0 <= idx < len(enum_opts) else raw
+                        except (ValueError, TypeError):
+                            value = raw
+                    else:
+                        value = raw
             else:
                 value = self._get_parsed_value(packet, self._data_field)
 

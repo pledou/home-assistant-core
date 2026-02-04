@@ -265,9 +265,9 @@ class EnOceanDongle:
             func,
             type_,
         )
-        # Persist the profile to config entry storage
+        # Persist the profile to config entry storage (thread-safe)
         if self.config_entry:
-            self._async_save_device_profiles()
+            self.hass.loop.call_soon_threadsafe(self._async_save_device_profiles)
 
     async def _async_load_device_profiles(self) -> None:
         """Load device profiles from config entry storage.

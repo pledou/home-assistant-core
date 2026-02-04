@@ -48,6 +48,7 @@ async def test_device_profile_persistence(
     # Register a device profile
     test_device_id = [0x04, 0x20, 0x58, 0xA5]
     dongle.register_device_profile(test_device_id, 0xD1, 0x07, 0x90)
+    await hass.async_block_till_done()
 
     # Verify the profile was saved to config_entry.data
     assert CONF_DEVICE_PROFILES in config_entry.data
@@ -115,6 +116,7 @@ async def test_multiple_device_profiles_persistence(
 
     for device_id, rorg, func, type_ in devices:
         dongle.register_device_profile(device_id, rorg, func, type_)
+    await hass.async_block_till_done()
 
     # Verify all profiles were saved
     profiles = config_entry.data[CONF_DEVICE_PROFILES]
@@ -186,9 +188,11 @@ async def test_device_profile_update_existing(
 
     # Register a device profile
     dongle.register_device_profile(test_device_id, 0xD1, 0x07, 0x90)
+    await hass.async_block_till_done()
 
     # Update the same device with different EEP values
     dongle.register_device_profile(test_device_id, 0xA5, 0x04, 0x01)
+    await hass.async_block_till_done()
 
     # Verify the profile was updated
     device_key = tuple(test_device_id)

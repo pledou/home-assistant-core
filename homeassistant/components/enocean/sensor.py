@@ -308,8 +308,18 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
         self._attr_name = attr_name or data_field or dev_name
         if fields is not None and isinstance(fields, EEPEntityDef) and fields.unit:
             self._unit = fields.unit
+            # Prefer explicit unit from EEP fields for the entity
+            self._attr_native_unit_of_measurement = fields.unit
+
         if device_class is not None:
             self._attr_device_class = device_class  # type: ignore[assignment]
+            # Ensure a valid native unit is set for temperature device class
+            if (device_class == SensorDeviceClass.TEMPERATURE) or (
+                isinstance(device_class, str) and device_class.lower() == "temperature"
+            ):
+                # If no unit provided via fields, default to Celsius
+                if not getattr(self, "_attr_native_unit_of_measurement", None):
+                    self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
 
     def value_changed(self, packet):
         """Update the internal state of the sensor when a packet arrives."""

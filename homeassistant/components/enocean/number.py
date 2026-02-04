@@ -169,9 +169,18 @@ class DynamicEnOceanNumber(DynamicEnoceanEntity, EnOceanNumber):
         if not packet.parsed or not self._data_field:
             return
 
-        if self._fields and get_field_value_with_enum is not None:
+        # Use the original EEP fields mapping (dict) for enum resolution when
+        # possible. If an EEPEntityDef dataclass was provided, it may include
+        # the raw mapping on `raw_fields`.
+        fields_mapping = None
+        if isinstance(self._fields, dict):
+            fields_mapping = self._fields
+        else:
+            fields_mapping = getattr(self._fields, "raw_fields", None)
+
+        if fields_mapping and get_field_value_with_enum is not None:
             value = get_field_value_with_enum(
-                packet.parsed, self._data_field, self._fields
+                packet.parsed, self._data_field, fields_mapping
             )
         else:
             value = self._get_parsed_value(packet, self._data_field)

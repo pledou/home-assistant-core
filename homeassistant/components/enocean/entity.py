@@ -1,5 +1,6 @@
 """Representation of an EnOcean device."""
 
+import contextlib
 import inspect
 from typing import Any
 
@@ -225,6 +226,11 @@ def _build_eep_fields_obj(
             enum_options=enum_opts or ent.enum_options,
             offset=offset_v,
         )
+        # Attach original raw fields mapping to the dataclass instance
+        # so callers that need the full EEP mapping (dict) can access it
+        # via `raw_fields` when only the dataclass is provided.
+        with contextlib.suppress(Exception):
+            setattr(fields_obj, "raw_fields", fields)
     except (AttributeError, KeyError, TypeError, ValueError) as err:
         # Log at debug level and leave fields_obj as None if metadata
         # extraction or conversion fails

@@ -15,7 +15,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, dispatcher_send
 
-from .const import SIGNAL_RECEIVE_MESSAGE, SIGNAL_SEND_MESSAGE
+from .const import CONF_DEVICE_PROFILES, SIGNAL_RECEIVE_MESSAGE, SIGNAL_SEND_MESSAGE
 from .entity import format_device_id_hex
 from .types import DiscoveryInfo
 
@@ -272,29 +272,40 @@ class EnOceanDongle:
     async def _async_load_device_profiles(self) -> None:
         """Load device profiles from config entry storage.
 
-        Device profiles are stored in config_entry.runtime_data to survive
+        Device profiles are stored in config_entry.data to survive
         Home Assistant restarts, ensuring that previously learned MSC devices
         can be parsed correctly when the integration is reloaded.
         """
-        if not self.config_entry or not hasattr(self.config_entry, "runtime_data"):
+        if not self.config_entry:
             return
 
-        stored_profiles = self.config_entry.runtime_data.get("device_profiles", {})
+        stored_profiles = self.config_entry.data.get(CONF_DEVICE_PROFILES, {})
 
         # Convert string keys back to tuples of ints
         for device_key_str, profile in stored_profiles.items():
             try:
                 # Parse the string representation of device key tuple back to tuple of ints
                 device_key = tuple(int(x) for x in device_key_str.split(","))
-                self._device_profiles[device_key] = profile
+
+                # Validate profile values are integers
+                rorg = int(profile.get("rorg", 0))
+                func = int(profile.get("func", 0))
+                type_ = int(profile.get("type", 0))
+
+                # Store validated profile with integer values
+                self._device_profiles[device_key] = {
+                    "rorg": rorg,
+                    "func": func,
+                    "type": type_,
+                }
                 _LOGGER.debug(
                     "Loaded persisted EEP profile for device %s: rorg=0x%02X func=0x%02X type=0x%02X",
                     format_device_id_hex(list(device_key)),
-                    profile.get("rorg", 0),
-                    profile.get("func", 0),
-                    profile.get("type", 0),
+                    rorg,
+                    func,
+                    type_,
                 )
-            except (ValueError, KeyError) as err:
+            except (ValueError, KeyError, TypeError) as err:
                 _LOGGER.warning(
                     "Failed to load device profile %s: %s", device_key_str, err
                 )
@@ -302,10 +313,10 @@ class EnOceanDongle:
     def _async_save_device_profiles(self) -> None:
         """Save device profiles to config entry storage.
 
-        Persists all known device profiles to config_entry.runtime_data
+        Persists all known device profiles to config_entry.data
         so they survive Home Assistant restarts.
         """
-        if not self.config_entry or not hasattr(self.config_entry, "runtime_data"):
+        if not self.config_entry:
             return
 
         # Convert device keys (tuples) to string representation for JSON storage
@@ -314,7 +325,11 @@ class EnOceanDongle:
             key_str = ",".join(str(x) for x in device_key)
             profiles_to_save[key_str] = profile
 
-        self.config_entry.runtime_data["device_profiles"] = profiles_to_save
+        # Update config entry data with device profiles
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            data={**self.config_entry.data, CONF_DEVICE_PROFILES: profiles_to_save},
+        )
         _LOGGER.debug(
             "Persisted %d device profiles to config entry storage",
             len(profiles_to_save),

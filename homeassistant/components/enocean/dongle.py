@@ -359,11 +359,6 @@ class EnOceanDongle:
             # No known profile for this device yet
             return
 
-        # Check if this is a reconstructed packet that needs EEP parsing
-        is_reconstructed = (
-            isinstance(packet.parsed, dict) and "reconstructed" in packet.parsed
-        )
-
         # Extract command if present (for MSC and VLD packets)
         command = getattr(packet, "cmd", None)
 
@@ -376,26 +371,16 @@ class EnOceanDongle:
 
             if parsed_result:
                 packet.parsed = parsed_result
-                if is_reconstructed:
-                    _LOGGER.debug(
-                        "Parsed reconstructed packet from %s: %s",
-                        format_device_id_hex(packet.sender)
-                        if isinstance(packet.sender, list)
-                        else packet.sender,
-                        list(parsed_result.keys()) if parsed_result else "empty",
-                    )
-            elif is_reconstructed:
-                # Log when we fail to parse a reconstructed packet
-                _LOGGER.debug(
-                    "Parser returned no data for reconstructed packet from %s "
-                    "(rorg=0x%02X, func=0x%02X, type=0x%02X, cmd=%s)",
-                    format_device_id_hex(packet.sender)
-                    if isinstance(packet.sender, list)
-                    else packet.sender,
-                    profile["rorg"],
-                    profile["func"],
-                    profile["type"],
-                    command,
+                _LOGGER.info(
+                    "Parsed packet from %s using registered profile: %s, data: %s, parsed values: %s",
+                    format_device_id_hex(packet.sender),
+                    list(parsed_result.keys()) if parsed_result else "empty",
+                    packet.data.hex() if packet.data else "None",
+                    {
+                        k: v
+                        for k, v in parsed_result.items()
+                        if isinstance(v, (int, str, bool))
+                    },
                 )
         except (ValueError, TypeError, OSError) as err:
             _LOGGER.debug(

@@ -372,12 +372,6 @@ async def async_create_entities_from_eep(
 
             # Skip if entity already exists
             if entity_registry.async_get_entity_id(platform_type, "enocean", unique_id):
-                LOGGER.debug(
-                    "%s entity %s for device %s already exists, skipping",
-                    platform_type.capitalize(),
-                    unique_id,
-                    format_device_id_hex(device_id),
-                )
                 continue
 
             fields = await hass.async_add_executor_job(
@@ -474,10 +468,3 @@ async def async_create_entities_from_eep(
 
     if new_entities:
         async_add_entities(new_entities)
-    else:
-        LOGGER.warning(
-            "No %s entities created for device %s after filtering and processing %d entity definitions",
-            platform_type,
-            format_device_id_hex(device_id),
-            len(entities_list),
-        )

@@ -483,47 +483,54 @@ class EnOceanDongle:
                 capt_index,
             )
 
-            eep_profile = {
-                "rorg": device_type.split("-")[0],
-                "func": device_type.split("-")[1]
-                if len(device_type.split("-")) > 1
-                else "00",
-                "type": device_type.split("-")[2]
-                if len(device_type.split("-")) > 2
-                else "00",
-            }
+            # Build string-based EEP profile parts (e.g. 'd1079','00','00')
+            eep_parts = device_type.split("-")
+            eep_rorg_str = eep_parts[0]
+            eep_func_str = eep_parts[1] if len(eep_parts) > 1 else "00"
+            eep_type_str = eep_parts[2] if len(eep_parts) > 2 else "00"
 
             # Convert sensor_id integer to list of 4 bytes for consistency with packet.sender format
             sensor_id_bytes = [(sensor_id >> (i * 8)) & 0xFF for i in range(4)]
 
-            # Parse EEP profile strings to integers
+            # Parse EEP profile strings to integers and register the profile
             try:
                 rorg_int = (
-                    int(eep_profile["rorg"], 16)
-                    if isinstance(eep_profile["rorg"], str)
-                    else eep_profile["rorg"]
+                    int(eep_rorg_str, 16)
+                    if isinstance(eep_rorg_str, str)
+                    else int(eep_rorg_str)
                 )
                 func_int = (
-                    int(eep_profile["func"], 16)
-                    if isinstance(eep_profile["func"], str)
-                    else eep_profile["func"]
+                    int(eep_func_str, 16)
+                    if isinstance(eep_func_str, str)
+                    else int(eep_func_str)
                 )
                 type_int = (
-                    int(eep_profile["type"], 16)
-                    if isinstance(eep_profile["type"], str)
-                    else eep_profile["type"]
+                    int(eep_type_str, 16)
+                    if isinstance(eep_type_str, str)
+                    else int(eep_type_str)
                 )
-            except (ValueError, KeyError):
-                rorg_int = 0
-                func_int = 0
-                type_int = 0
+            except (ValueError, KeyError, TypeError):
+                _LOGGER.warning(
+                    "Invalid EEP profile strings for sensor ID %s: rorg=%s, func=%s, type=%s",
+                    f"{sensor_id:08X}",
+                    eep_rorg_str,
+                    eep_func_str,
+                    eep_type_str,
+                )
+                return
 
             # Register the sensor's EEP profile for future packet parsing
             self.register_device_profile(sensor_id_bytes, rorg_int, func_int, type_int)
 
+            # Send discovery info with normalized integer EEP profile values
             discovery_info: DiscoveryInfo = {
                 "device_id": sensor_id_bytes,
-                "eep_profile": eep_profile,
+                "eep_profile": {
+                    "rorg": rorg_int,
+                    "rorg_func": func_int,
+                    "rorg_type": type_int,
+                    "manufacturer": None,
+                },
             }
             # Schedule discovery signal in event loop thread-safely
             self.hass.loop.call_soon_threadsafe(

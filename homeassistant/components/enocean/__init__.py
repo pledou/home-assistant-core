@@ -89,9 +89,27 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
         # Narrow the TypedDict to a local variable so types are preserved
         eep_profile: EepProfile = discovery_info["eep_profile"]
-        rorg = eep_profile["rorg"]
-        rorg_func = eep_profile["rorg_func"]
-        rorg_type = eep_profile["rorg_type"]
+        # Minimal runtime guard: require that EEP profile fields are integers
+        # as defined by the TypedDict `EepProfile`. The dongle should send
+        # normalized integer values; if it's not implemented correctly, skip
+        # discovery and log a concise warning rather than attempting complex
+        # coercions here.
+        _eep = None
+        rorg = eep_profile.get("rorg")
+        rorg_func = eep_profile.get("rorg_func", eep_profile.get("func"))
+        rorg_type = eep_profile.get("rorg_type", eep_profile.get("type"))
+
+        if not (
+            isinstance(rorg, int)
+            and isinstance(rorg_func, int)
+            and isinstance(rorg_type, int)
+        ):
+            _LOGGER.warning(
+                "Invalid EEP profile for device %s: expected integer fields in EepProfile, got %s",
+                format_device_id_hex(device_id),
+                eep_profile,
+            )
+            return
 
         device_registry = dr.async_get(hass)
         # Check if device already exists before creating

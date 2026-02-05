@@ -305,6 +305,26 @@ class EnOceanDongle:
                     func,
                     type_,
                 )
+                # Emit discovery for persisted profiles so platforms can
+                # recreate entities after Home Assistant restart. This uses
+                # the same dispatcher signal as live discovery to keep the
+                # discovery flow centralized in async_setup_entry.
+                try:
+                    discovery_info = {
+                        "device_id": list(device_key),
+                        "eep_profile": {
+                            "rorg": rorg,
+                            "rorg_func": func,
+                            "rorg_type": type_,
+                            "manufacturer": profile.get("manufacturer"),
+                        },
+                    }
+                    dispatcher_send(self.hass, SIGNAL_DISCOVER_DEVICE, discovery_info)
+                except Exception:
+                    _LOGGER.exception(
+                        "Failed to dispatch discovery for persisted EnOcean device %s",
+                        format_device_id_hex(list(device_key)),
+                    )
             except (ValueError, KeyError, TypeError) as err:
                 _LOGGER.warning(
                     "Failed to load device profile %s: %s", device_key_str, err
@@ -371,11 +391,25 @@ class EnOceanDongle:
 
             if parsed_result:
                 packet.parsed = parsed_result
+                # Safely stringify packet.data whether it's bytes or a list of ints
+                if packet.data:
+                    if isinstance(packet.data, (bytes, bytearray)):
+                        data_hex = packet.data.hex()
+                    elif isinstance(packet.data, list):
+                        try:
+                            data_hex = bytes(packet.data).hex()
+                        except (TypeError, ValueError):
+                            data_hex = str(packet.data)
+                    else:
+                        data_hex = str(packet.data)
+                else:
+                    data_hex = "None"
+
                 _LOGGER.info(
                     "Parsed packet from %s using registered profile: %s, data: %s, parsed values: %s",
                     format_device_id_hex(packet.sender),
                     list(parsed_result.keys()) if parsed_result else "empty",
-                    packet.data.hex() if packet.data else "None",
+                    data_hex,
                     {
                         k: v
                         for k, v in parsed_result.items()

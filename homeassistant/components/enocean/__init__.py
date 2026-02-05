@@ -85,7 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         """
         device_id = discovery_info["device_id"]
         # Convert device_id from list[int] to hex:hex:hex:hex format for device registry
-        device_id_hex = format_device_id_hex(device_id)
+        device_id_hex_underscore = format_device_id_hex_underscore(device_id)
 
         # Narrow the TypedDict to a local variable so types are preserved
         eep_profile: EepProfile = discovery_info["eep_profile"]
@@ -114,7 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         device_registry = dr.async_get(hass)
         # Check if device already exists before creating
         existing_device = device_registry.async_get_device(
-            identifiers={(DOMAIN, device_id_hex)}
+            identifiers={(DOMAIN, device_id_hex_underscore)}
         )
 
         if existing_device is None:

@@ -341,6 +341,15 @@
             device_class: "power"
 
 0xD1079:
+  0x00:
+    0x00:
+      entities:
+        - component: sensor
+          name: "Batt"
+          config:
+            device_class: "battery"
+            entity_category: "diagnostic"
+            value_template: "{{ (value_parsed / 7 * 100) | round }}"
   0x01:
     0x00:
       device_config:

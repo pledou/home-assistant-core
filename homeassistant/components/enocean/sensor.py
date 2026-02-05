@@ -28,7 +28,7 @@ from homeassistant.const import (
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import config_validation as cv, template
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DATA_ENOCEAN, LOGGER
@@ -310,6 +310,7 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
         )
         # Set sensor-specific attributes
         self._attr_name = attr_name or data_field or dev_name
+        self._value_template = None
 
         # Apply all EEP field properties if available
         if fields is not None and isinstance(fields, EEPEntityDef):
@@ -325,6 +326,8 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
                 contextlib.suppress(ValueError)
                 with contextlib.suppress(ValueError):
                     self._attr_state_class = SensorStateClass(fields.state_class)
+            if fields.value_template:
+                self._value_template = fields.value_template
         # Override with explicit device_class parameter if provided
         if device_class is not None:
             # Normalize device_class to enum if it's a string
@@ -374,7 +377,31 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
                 value = self._get_parsed_value(packet, self._data_field)
 
             if value is not None:
-                self._attr_native_value = value
+                # Apply value_template transformation if configured
+                if self._value_template:
+                    try:
+                        # Create template context with the parsed data
+                        # Support both direct field access and value_parsed-style access
+                        template_vars = {
+                            "value": value,
+                            "value_parsed": packet.parsed if packet.parsed else {},
+                        }
+                        tmpl = template.Template(self._value_template, self.hass)
+                        rendered = tmpl.async_render(template_vars)
+                        # Try to convert to appropriate type
+                        try:
+                            self._attr_native_value = float(rendered)
+                        except (ValueError, TypeError):
+                            self._attr_native_value = rendered
+                    except (template.TemplateError, ValueError, TypeError) as err:
+                        LOGGER.warning(
+                            "Failed to render value_template for %s: %s",
+                            self._attr_name,
+                            err,
+                        )
+                        self._attr_native_value = value
+                else:
+                    self._attr_native_value = value
                 self.schedule_update_ha_state()
         except (ValueError, KeyError, OSError, TypeError, struct.error) as err:
             LOGGER.error(

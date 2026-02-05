@@ -182,30 +182,172 @@ def _extract_eep_fields(
                 if size_el and size_el.text:
                     with contextlib.suppress(ValueError, TypeError):
                         size = int(size_el.text.strip(), 0)
-                fields.append(
-                    EEPEntityDef(
-                        description=description,
-                        rorg=rorg,
-                        rorg_func=rorg_func,
-                        rorg_type=rorg_type,
-                        data_field=shortcut,
-                        unit=unit,
-                        device_class=None,
-                        entity_type=_classify_entity_type(
-                            shortcut, description, field_type, items
-                        ),
-                        min_value=min_value,
-                        max_value=max_value,
-                        enum_options=(
-                            [it["description"] for it in (items or [])]
-                            if items
-                            else None
-                        ),
-                        offset=offset,
-                    )
+                entity_def = EEPEntityDef(
+                    description=description,
+                    rorg=rorg,
+                    rorg_func=rorg_func,
+                    rorg_type=rorg_type,
+                    data_field=shortcut,
+                    unit=unit,
+                    device_class=None,
+                    entity_type=_classify_entity_type(
+                        shortcut, description, field_type, items
+                    ),
+                    min_value=min_value,
+                    max_value=max_value,
+                    enum_options=(
+                        [it["description"] for it in (items or [])] if items else None
+                    ),
+                    offset=offset,
                 )
+                # Apply smart auto-detection for device properties
+                _auto_detect_entity_properties(entity_def)
+                fields.append(entity_def)
 
     return fields
+
+
+def _auto_detect_entity_properties(entity_def: EEPEntityDef) -> None:
+    """Auto-detect and set entity properties based on description and data_field.
+
+    Detects device_class, icon, state_class, entity_category based on patterns
+    in the description and shortcut. Takes inspiration from common patterns.
+
+    Args:
+        entity_def: Entity definition to enhance with detected properties
+    """
+    desc_lower = (entity_def.description or "").lower()
+    shortcut_upper = (entity_def.data_field or "").upper()
+
+    def _set_if_missing(**kwargs):
+        if "device_class" in kwargs and not entity_def.device_class:
+            entity_def.device_class = kwargs["device_class"]
+        if "unit" in kwargs and not entity_def.unit:
+            entity_def.unit = kwargs["unit"]
+        if "icon" in kwargs and not entity_def.icon:
+            entity_def.icon = kwargs["icon"]
+        if "state_class" in kwargs and not entity_def.state_class:
+            entity_def.state_class = kwargs["state_class"]
+        if "entity_category" in kwargs and not entity_def.entity_category:
+            entity_def.entity_category = kwargs["entity_category"]
+
+    detectors = [
+        (
+            lambda: any(
+                k in desc_lower
+                for k in ("temperature", "température", "temp", "temperatur")
+            )
+            or "TEMP" in shortcut_upper,
+            {
+                "device_class": "temperature",
+                "unit": "°C",
+                "icon": "mdi:thermometer",
+                "state_class": "measurement",
+            },
+        ),
+        (
+            lambda: any(
+                k in desc_lower
+                for k in ("humidity", "humidité", "humid", "feuchtigkeit")
+            )
+            or "HUM" in shortcut_upper,
+            {
+                "device_class": "humidity",
+                "unit": "%",
+                "icon": "mdi:water-percent",
+                "state_class": "measurement",
+            },
+        ),
+        (
+            lambda: any(k in desc_lower for k in ("battery", "batterie", "batt"))
+            or "BATT" in shortcut_upper,
+            {
+                "device_class": "battery",
+                "unit": "%",
+                "icon": "mdi:battery",
+                "entity_category": "diagnostic",
+                "state_class": "measurement",
+            },
+        ),
+        (
+            lambda: any(k in desc_lower for k in ("power", "puissance", "leistung"))
+            or "POW" in shortcut_upper
+            or "PWR" in shortcut_upper,
+            {
+                "device_class": "power",
+                "unit": "W",
+                "icon": "mdi:lightning-bolt",
+                "state_class": "measurement",
+            },
+        ),
+        (
+            lambda: any(k in desc_lower for k in ("energy", "energie", "énergie"))
+            or "ENERGY" in shortcut_upper,
+            {
+                "device_class": "energy",
+                "unit": "Wh",
+                "icon": "mdi:lightning-bolt",
+                "state_class": "total_increasing",
+            },
+        ),
+        (
+            lambda: any(k in desc_lower for k in ("voltage", "tension", "spannung"))
+            or "VOLT" in shortcut_upper
+            or shortcut_upper == "U",
+            {
+                "device_class": "voltage",
+                "unit": "V",
+                "icon": "mdi:flash",
+                "state_class": "measurement",
+            },
+        ),
+        (
+            lambda: any(k in desc_lower for k in ("current", "courant", "strom"))
+            or "AMP" in shortcut_upper
+            or shortcut_upper == "I",
+            {
+                "device_class": "current",
+                "unit": "A",
+                "icon": "mdi:current-ac",
+                "state_class": "measurement",
+            },
+        ),
+        (
+            lambda: any(k in desc_lower for k in ("illuminance", "lux", "light"))
+            or "LUX" in shortcut_upper,
+            {
+                "device_class": "illuminance",
+                "unit": "lx",
+                "icon": "mdi:brightness-5",
+                "state_class": "measurement",
+            },
+        ),
+        (
+            lambda: any(k in desc_lower for k in ("motion", "presence", "occupancy"))
+            or any(s in shortcut_upper for s in ("PIR", "MOT")),
+            {"icon": "mdi:run", "entity_category": "diagnostic"},
+        ),
+        (
+            lambda: any(k in desc_lower for k in ("smoke", "fumée", "rauch"))
+            or "SMOKE" in shortcut_upper,
+            {"icon": "mdi:smoke", "entity_category": "diagnostic"},
+        ),
+        (
+            lambda: any(k in desc_lower for k in ("co2", "co₂", "carbon dioxide"))
+            or "CO2" in shortcut_upper,
+            {"unit": "ppm", "icon": "mdi:molecule-co2", "state_class": "measurement"},
+        ),
+    ]
+
+    for predicate, props in detectors:
+        try:
+            if predicate():
+                _set_if_missing(**props)
+                break
+        except (AttributeError, TypeError, ValueError):
+            # Be defensive: catch only expected errors from detectors so auto-detection
+            # continues without masking unrelated exceptions
+            continue
 
 
 def _classify_entity_type(
@@ -396,5 +538,17 @@ def _overlay_mapping_overrides(
 
             if config.get("options"):
                 eep_entity.enum_options = config["options"]
+
+            if config.get("value_template"):
+                eep_entity.value_template = config["value_template"]
+
+            if config.get("icon"):
+                eep_entity.icon = config["icon"]
+
+            if config.get("state_class"):
+                eep_entity.state_class = config["state_class"]
+
+            if config.get("entity_category"):
+                eep_entity.entity_category = config["entity_category"]
 
     return eep_entities

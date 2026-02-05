@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import struct
 
@@ -207,6 +208,15 @@ class DynamicEnOceanBinarySensor(DynamicEnoceanEntity, BinarySensorEntity):
         else:
             device_class_enum = device_class
         self._attr_device_class = device_class_enum
+
+        # Apply binary sensor specific device_class from EEPEntityDef if available
+        if (
+            fields is not None
+            and isinstance(fields, EEPEntityDef)
+            and fields.device_class
+        ):
+            with contextlib.suppress(ValueError):
+                self._attr_device_class = BinarySensorDeviceClass(fields.device_class)
 
     @callback
     def value_changed(self, packet) -> None:

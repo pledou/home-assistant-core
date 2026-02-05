@@ -61,3 +61,7 @@ class EEPEntityDef:
     max_value: float | None = None
     enum_options: list[str] | None = None
     offset: int | None = None
+    icon: str | None = None
+    state_class: str | None = None
+    entity_category: str | None = None
+    value_template: str | None = None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 import struct
 
@@ -309,13 +310,30 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
         )
         # Set sensor-specific attributes
         self._attr_name = attr_name or data_field or dev_name
-        if fields is not None and isinstance(fields, EEPEntityDef) and fields.unit:
-            self._unit = fields.unit
-            # Prefer explicit unit from EEP fields for the entity
-            self._attr_native_unit_of_measurement = fields.unit
 
+        # Apply all EEP field properties if available
+        if fields is not None and isinstance(fields, EEPEntityDef):
+            if fields.unit:
+                self._unit = fields.unit
+                self._attr_native_unit_of_measurement = fields.unit
+
+            if fields.device_class:
+                contextlib.suppress(ValueError)
+                with contextlib.suppress(ValueError):
+                    self._attr_device_class = SensorDeviceClass(fields.device_class)
+            if fields.state_class:
+                contextlib.suppress(ValueError)
+                with contextlib.suppress(ValueError):
+                    self._attr_state_class = SensorStateClass(fields.state_class)
+        # Override with explicit device_class parameter if provided
         if device_class is not None:
-            self._attr_device_class = device_class  # type: ignore[assignment]
+            # Normalize device_class to enum if it's a string
+            if isinstance(device_class, str):
+                contextlib.suppress(ValueError)
+                with contextlib.suppress(ValueError):
+                    self._attr_device_class = SensorDeviceClass(device_class)
+            else:
+                self._attr_device_class = device_class
             # Ensure a valid native unit is set for temperature device class
             if (device_class == SensorDeviceClass.TEMPERATURE) or (
                 isinstance(device_class, str) and device_class.lower() == "temperature"

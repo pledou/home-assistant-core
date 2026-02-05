@@ -139,11 +139,14 @@ class DynamicEnOceanNumber(DynamicEnoceanEntity, EnOceanNumber):
         extracted_max = None
         extracted_unit = None
 
-        if fields is not None:
-            if isinstance(fields, EEPEntityDef):
-                extracted_min = fields.min_value
-                extracted_max = fields.max_value
-                extracted_unit = fields.unit
+        if fields is not None and isinstance(fields, EEPEntityDef):
+            extracted_min = fields.min_value
+            extracted_max = fields.max_value
+            extracted_unit = fields.unit
+
+            # Apply number-specific device_class if available
+            if fields.device_class:
+                self._attr_device_class = fields.device_class  # type: ignore[assignment]
 
         # Use provided min/max/unit, fall back to extracted values, then None
         if min_value is not None:

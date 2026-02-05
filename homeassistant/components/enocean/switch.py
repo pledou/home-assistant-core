@@ -242,6 +242,14 @@ class DynamicEnOceanSwitch(DynamicEnoceanEntity, EnOceanSwitch):
             channel=channel,
         )
 
+        # Apply switch-specific device_class from EEPEntityDef if available
+        if (
+            fields is not None
+            and isinstance(fields, EEPEntityDef)
+            and fields.device_class
+        ):
+            self._attr_device_class = fields.device_class  # type: ignore[assignment]
+
     @callback
     def value_changed(self, packet):
         """Prefer parsed values via parser/fields, fallback to base implementation."""

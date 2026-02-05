@@ -145,6 +145,14 @@ class DynamicEnoceanEntity(EnOceanEntity):
         self._rorg_type = rorg_type
         self._fields = fields
 
+        # Apply common properties from EEPEntityDef to entity attributes
+        if fields is not None and isinstance(fields, EEPEntityDef):
+            if fields.icon:
+                self._attr_icon = fields.icon
+
+            if fields.entity_category:
+                self._attr_entity_category = fields.entity_category  # type: ignore[assignment]
+
     def _get_parsed_value(self, packet, field_name: str):
         """Get a field value from the pre-parsed packet data.
 

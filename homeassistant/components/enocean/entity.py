@@ -371,11 +371,6 @@ async def async_create_entities_from_eep(
 
             # Skip if we've already created an entity with this unique ID
             if unique_id in seen_unique_ids:
-                LOGGER.debug(
-                    "Skipping duplicate entity with unique_id %s for device %s",
-                    unique_id,
-                    format_device_id_hex(device_id),
-                )
                 continue
             seen_unique_ids.add(unique_id)
 

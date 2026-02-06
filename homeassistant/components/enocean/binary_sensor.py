@@ -227,20 +227,14 @@ class DynamicEnOceanBinarySensor(DynamicEnoceanEntity, BinarySensorEntity):
                 return
             value = self._get_parsed_value(packet, self._data_field)
 
-            LOGGER.debug(
-                "Dynamic binary sensor %s: CMD=%s, Field=%s, Value=%s",
-                self._attr_name,
-                packet.parsed.get("CMD"),
-                self._data_field,
-                value,
-            )
-
             if value is not None:
                 # Convert to boolean
                 try:
                     self._attr_is_on = bool(value)
                 except (TypeError, ValueError):
                     self._attr_is_on = bool(int(value))
+            else:
+                self._attr_is_on = False
 
                 self.schedule_update_ha_state()
         except (ValueError, TypeError, KeyError, OSError, struct.error) as err:

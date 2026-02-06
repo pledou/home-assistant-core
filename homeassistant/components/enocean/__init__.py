@@ -333,6 +333,18 @@ async def async_remove_config_entry_device(
                 device_entry.name,
                 identifier[1],
             )
+            # Also remove it from the dongle's internal tracking so it can be
+            # re-discovered if it sends packets in the future.
+            enocean_data = hass.data.get(DATA_ENOCEAN, {})
+            enocean_dongle = enocean_data.get(ENOCEAN_DONGLE)
+            if enocean_dongle is not None:
+                try:
+                    enocean_dongle.remove_entity_for_device(identifier[1])
+                except Exception:
+                    _LOGGER.exception(
+                        "Error removing device %s from dongle internal tracking",
+                        identifier[1],
+                    )
             # Allow removal - device will be re-discovered if it sends packets
             return True
 

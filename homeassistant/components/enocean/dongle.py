@@ -70,6 +70,23 @@ class EnOceanDongle:
         device_key = tuple(device_id) if isinstance(device_id, list) else (device_id,)
         return device_key in self._devices_with_entities
 
+    def remove_entity_for_device(self, device_id) -> bool:
+        """Remove the given device_id from tracking of devices with entities.
+
+        This allows the device to be rediscovered and have new entities created
+        if it sends packets again. Returns True if the device was previously
+        marked as having entities, False otherwise.
+        """
+        device_key = tuple(device_id) if isinstance(device_id, list) else (device_id,)
+        if device_key in self._devices_with_entities:
+            self._devices_with_entities.remove(device_key)
+            _LOGGER.debug(
+                "Removed device %s from tracking of devices with entities",
+                format_device_id_hex(list(device_key)),
+            )
+            return True
+        return False
+
     def has_device_entities(self, device_id) -> bool:
         """Compatibility wrapper: return True if device already has entities.
 
@@ -286,13 +303,6 @@ class EnOceanDongle:
             "func": func,
             "type": type_,
         }
-        _LOGGER.debug(
-            "Registered EEP profile for device %s: rorg=0x%02X func=0x%02X type=0x%02X",
-            format_device_id_hex(list(device_key)),
-            rorg,
-            func,
-            type_,
-        )
         # Persist the profile to config entry storage (thread-safe)
         if self.config_entry:
             self.hass.loop.call_soon_threadsafe(self._async_save_device_profiles)
@@ -407,10 +417,6 @@ class EnOceanDongle:
         self.hass.config_entries.async_update_entry(
             self.config_entry,
             data={**self.config_entry.data, CONF_DEVICE_PROFILES: profiles_to_save},
-        )
-        _LOGGER.debug(
-            "Persisted %d device profiles to config entry storage",
-            len(profiles_to_save),
         )
 
     def _parse_packet_by_profile(self, packet):

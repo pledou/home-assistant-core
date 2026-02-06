@@ -35,9 +35,8 @@ def test_message_received_callback_calls_value_changed() -> None:
             self.called = True
 
     e = TestEntity()
-    # Create a fake packet with matching sender_int
-    sender_int = int.from_bytes(bytes([0x01, 0x02, 0x03, 0x04]), "big")
-    pkt = SimpleNamespace(sender_int=sender_int)
+    # Create a fake packet with matching sender
+    pkt = SimpleNamespace(sender=[0x01, 0x02, 0x03, 0x04])
 
     e._message_received_callback(pkt)
     assert e.called
@@ -59,7 +58,7 @@ def test_message_received_callback_ignores_other_senders() -> None:
             self.called = True
 
     e = TestEntity()
-    pkt = SimpleNamespace(sender_int=0xDEADBEEF)
+    pkt = SimpleNamespace(sender=[0xDE, 0xAD, 0xBE, 0xEF])
     e._message_received_callback(pkt)
     assert not e.called
 

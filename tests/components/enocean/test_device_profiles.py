@@ -83,7 +83,7 @@ async def test_device_profile_loading_after_restart(
     dongle = EnOceanDongle(hass, "/dev/ttyUSB0", config_entry)
 
     # Load the profiles
-    await dongle._async_load_device_profiles()
+    await dongle.async_load_device_profiles()
 
     # Verify the profile was loaded
     device_key = tuple(test_device_id)
@@ -124,7 +124,7 @@ async def test_multiple_device_profiles_persistence(
 
     # Create a new dongle and load profiles
     dongle2 = EnOceanDongle(hass, "/dev/ttyUSB0", config_entry)
-    await dongle2._async_load_device_profiles()
+    await dongle2.async_load_device_profiles()
 
     # Verify all profiles were loaded
     assert len(dongle2._device_profiles) == 3
@@ -156,7 +156,7 @@ async def test_device_profile_loading_with_invalid_data(
     config_entry.add_to_hass(hass)
 
     dongle = EnOceanDongle(hass, "/dev/ttyUSB0", config_entry)
-    await dongle._async_load_device_profiles()
+    await dongle.async_load_device_profiles()
 
     # Only the valid profile should be loaded
     assert len(dongle._device_profiles) == 1

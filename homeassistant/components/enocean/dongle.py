@@ -1,6 +1,7 @@
 """Representation of an EnOcean dongle."""
 
 import asyncio
+from collections.abc import Callable
 import glob
 import logging
 from os.path import basename, normpath
@@ -13,7 +14,11 @@ import serial
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.dispatcher import async_dispatcher_connect, dispatcher_send
+from homeassistant.helpers.dispatcher import (
+    async_dispatcher_connect,
+    async_dispatcher_send,
+    dispatcher_send,
+)
 
 from .const import CONF_DEVICE_PROFILES, SIGNAL_RECEIVE_MESSAGE, SIGNAL_SEND_MESSAGE
 from .entity import format_device_id_hex
@@ -48,17 +53,38 @@ class EnOceanDongle:
         self.identifier = basename(normpath(serial_path))
         self.hass = hass
         self.config_entry = config_entry
-        self.dispatcher_disconnect_handle = None
+        self.dispatcher_disconnect_handle: Callable[[], None] | None = None
         self._discovered_sensors: dict = {}  # Track discovered sensors by (parent_id, sensor_id)
         self._device_profiles: dict[
             tuple[int, ...], dict
         ] = {}  # Track EEP profiles by device_id
+        self._devices_with_entities: set[tuple[int, ...]] = (
+            set()
+        )  # Track devices that have entities
         self._learning_task: asyncio.Task[None] | None = None
         self._learning_duration = 10  # Default 10 minutes
         self.base_id: list[int] | None = None
 
-    async def async_setup(self):
-        """Finish the setup of the bridge and supported platforms."""
+    def has_entity_for_device(self, device_id) -> bool:
+        """Check if the given device_id already has entities created."""
+        device_key = tuple(device_id) if isinstance(device_id, list) else (device_id,)
+        return device_key in self._devices_with_entities
+
+    def has_device_entities(self, device_id) -> bool:
+        """Compatibility wrapper: return True if device already has entities.
+
+        Some callers expect the method name `has_device_entities`; keep a
+        thin wrapper to preserve the external API.
+        """
+        return self.has_entity_for_device(device_id)
+
+    async def async_setup(self, load_profiles: bool = True):
+        """Finish the setup of the bridge and supported platforms.
+
+        Args:
+            load_profiles: If True, load persisted device profiles immediately.
+                          If False, caller must call async_load_device_profiles() later.
+        """
         self._communicator.start()
 
         # Pre-fetch base ID to avoid deadlock when UTE teach-in arrives
@@ -66,7 +92,9 @@ class EnOceanDongle:
         await self.hass.async_add_executor_job(self._fetch_base_id)
 
         # Load previously learned device profiles from config entry storage
-        await self._async_load_device_profiles()
+        # unless the caller wants to defer this until after platforms are set up
+        if load_profiles:
+            await self.async_load_device_profiles()
 
         self.dispatcher_disconnect_handle = async_dispatcher_connect(
             self.hass, SIGNAL_SEND_MESSAGE, self._send_message_callback
@@ -269,12 +297,31 @@ class EnOceanDongle:
         if self.config_entry:
             self.hass.loop.call_soon_threadsafe(self._async_save_device_profiles)
 
-    async def _async_load_device_profiles(self) -> None:
+    def mark_device_has_entities(self, device_id):
+        """Mark that a device has entities created.
+
+        This prevents repeated rediscovery attempts for devices that
+        already have entities in Home Assistant.
+
+        Args:
+            device_id: Device ID (list of ints or tuple)
+        """
+        device_key = tuple(device_id) if isinstance(device_id, list) else (device_id,)
+        self._devices_with_entities.add(device_key)
+        _LOGGER.debug(
+            "Marked device %s as having entities",
+            format_device_id_hex(list(device_key)),
+        )
+
+    async def async_load_device_profiles(self) -> None:
         """Load device profiles from config entry storage.
 
         Device profiles are stored in config_entry.data to survive
         Home Assistant restarts, ensuring that previously learned MSC devices
         can be parsed correctly when the integration is reloaded.
+
+        This method can be called after platform setup to ensure platform
+        callbacks are registered before discovery signals are dispatched.
         """
         if not self.config_entry:
             return
@@ -319,7 +366,18 @@ class EnOceanDongle:
                             "manufacturer": profile.get("manufacturer"),
                         },
                     }
-                    dispatcher_send(self.hass, SIGNAL_DISCOVER_DEVICE, discovery_info)
+                    _LOGGER.info(
+                        "Dispatching discovery for persisted device %s (rorg=0x%02X, func=0x%02X, type=0x%02X)",
+                        format_device_id_hex(list(device_key)),
+                        rorg,
+                        func,
+                        type_,
+                    )
+                    # Use async_dispatcher_send since we're in an async method
+                    # and the handler is async
+                    async_dispatcher_send(
+                        self.hass, SIGNAL_DISCOVER_DEVICE, discovery_info
+                    )
                 except Exception:
                     _LOGGER.exception(
                         "Failed to dispatch discovery for persisted EnOcean device %s",
@@ -416,6 +474,29 @@ class EnOceanDongle:
                         if isinstance(v, (int, str, bool))
                     },
                 )
+
+                # If device has a profile but no entities yet, trigger rediscovery
+                # This happens after restart when persisted profiles are loaded
+                if device_key not in self._devices_with_entities:
+                    _LOGGER.info(
+                        "Device %s has no entities yet, triggering rediscovery",
+                        format_device_id_hex(list(device_key)),
+                    )
+                    discovery_info = {
+                        "device_id": list(device_key),
+                        "eep_profile": {
+                            "rorg": profile["rorg"],
+                            "rorg_func": profile["func"],
+                            "rorg_type": profile["type"],
+                            "manufacturer": profile.get("manufacturer"),
+                        },
+                    }
+                    # Schedule discovery signal in event loop thread-safely
+                    self.hass.loop.call_soon_threadsafe(
+                        lambda: async_dispatcher_send(
+                            self.hass, SIGNAL_DISCOVER_DEVICE, discovery_info
+                        )
+                    )
         except (ValueError, TypeError, OSError) as err:
             _LOGGER.debug(
                 "Failed to parse packet from %s: %s",
@@ -508,8 +589,14 @@ class EnOceanDongle:
             eep_func_str = eep_parts[1] if len(eep_parts) > 1 else "00"
             eep_type_str = eep_parts[2] if len(eep_parts) > 2 else "00"
 
-            # Convert sensor_id integer to list of 4 bytes for consistency with packet.sender format
-            sensor_id_bytes = [(sensor_id >> (i * 8)) & 0xFF for i in range(4)]
+            # Convert sensor_id integer to list of 4 bytes in big-endian order to match packet.sender format
+            # packet.sender is [MSB, ..., LSB], so extract bytes from most to least significant
+            sensor_id_bytes = [
+                (sensor_id >> 24) & 0xFF,  # Most significant byte
+                (sensor_id >> 16) & 0xFF,
+                (sensor_id >> 8) & 0xFF,
+                sensor_id & 0xFF,  # Least significant byte
+            ]
 
             # Parse EEP profile strings to integers and register the profile
             try:

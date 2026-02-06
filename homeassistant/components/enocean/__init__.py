@@ -70,7 +70,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         config_entry.runtime_data = {}
 
     usb_dongle = EnOceanDongle(hass, config_entry.data[CONF_DEVICE], config_entry)
-    await usb_dongle.async_setup()
+    # Start dongle communication but don't load persisted profiles yet
+    await usb_dongle.async_setup(load_profiles=False)
     enocean_data[ENOCEAN_DONGLE] = usb_dongle
 
     # Set up platforms using modern config entry approach
@@ -112,12 +113,16 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             return
 
         device_registry = dr.async_get(hass)
-        # Check if device already exists before creating
+        # Check if device already exists in device registry
         existing_device = device_registry.async_get_device(
             identifiers={(DOMAIN, device_id_hex_underscore)}
         )
 
-        if existing_device is None:
+        # Check if device already has entities created
+        has_entities = usb_dongle.has_device_entities(device_id)
+
+        # Only validate EEP profile and create entities if device doesn't have entities yet
+        if not has_entities:
             # If python-enocean's EEP parser is available, check that the
             # (RORG, FUNC, TYPE) tuple exists in the EEP database. The
             # EEP.find_profile method will normalize multi-byte RORGs.
@@ -196,27 +201,32 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 rorg_func,
                 rorg_type,
             )
+        else:
+            # Device already has entities, just register profile and return
+            usb_dongle.register_device_profile(device_id, rorg, rorg_func, rorg_type)
+            return
 
-            # Load and populate entities from the resolved EEP profile with YAML mapping overlays
-            entities = await hass.async_add_executor_job(
-                get_entities_for_device,
-                cast(
-                    EepProfile,
-                    {
-                        "rorg": rorg,
-                        "rorg_func": rorg_func,
-                        "rorg_type": rorg_type,
-                        "manufacturer": eep_profile.get("manufacturer"),
-                    },
-                ),
-            )
+        # Load and populate entities from the resolved EEP profile with YAML mapping overlays
+        # This only happens for newly discovered devices
+        entities = await hass.async_add_executor_job(
+            get_entities_for_device,
+            cast(
+                EepProfile,
+                {
+                    "rorg": rorg,
+                    "rorg_func": rorg_func,
+                    "rorg_type": rorg_type,
+                    "manufacturer": eep_profile.get("manufacturer"),
+                },
+            ),
+        )
 
-            if entities:
-                # Register device EEP profile with dongle for systematic packet parsing
-                usb_dongle.register_device_profile(
-                    device_id, rorg, rorg_func, rorg_type
-                )
+        if entities:
+            # Register device EEP profile with dongle for systematic packet parsing
+            usb_dongle.register_device_profile(device_id, rorg, rorg_func, rorg_type)
 
+            # Create or update device in registry
+            if not existing_device:
                 device_registry.async_get_or_create(
                     config_entry_id=config_entry.entry_id,
                     identifiers={(DOMAIN, format_device_id_hex_underscore(device_id))},
@@ -225,55 +235,47 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                     model=f"0x{rorg:02x} (func=0x{(rorg_func or 0):02x}, type=0x{rorg_type:02x})",
                 )
 
-                def _ent_val(ent, key):
-                    if isinstance(ent, dict):
-                        return ent.get(key)
-                    return getattr(ent, key, None)
+            def _ent_val(ent, key):
+                if isinstance(ent, dict):
+                    return ent.get(key)
+                return getattr(ent, key, None)
 
-                _LOGGER.debug(
-                    "Entity details: %s",
-                    [
-                        {
-                            "description": _ent_val(e, "description"),
-                            "data_field": _ent_val(e, "data_field"),
-                            "entity_type": _ent_val(e, "entity_type"),
-                        }
-                        for e in entities[:5]
-                    ],
-                )
-                # Call registered platform callbacks directly to add entities
-                platform_callbacks = enocean_data.get("platform_callbacks", {})
-                for platform_name, callback in platform_callbacks.items():
-                    try:
-                        await callback(
-                            device_id,
-                            entities,
-                            rorg,
-                            rorg_func,
-                            rorg_type,
-                        )
-                    except (
-                        TimeoutError,
-                        RuntimeError,
-                        ValueError,
-                        TypeError,
-                        LookupError,
-                        OSError,
-                    ):
-                        _LOGGER.exception(
-                            "Error calling platform callback %s for device %s",
-                            platform_name,
-                            format_device_id_hex(device_id),
-                        )
-            else:
-                # Signal platforms without entities if profile couldn't be loaded
-                _LOGGER.warning(
-                    "No entities created for device %s as EEP profile %02x-%02x-%02x could not be loaded, device has not been integrated",
-                    format_device_id_hex(device_id),
-                    rorg,
-                    rorg_func,
-                    rorg_type,
-                )
+            # Call registered platform callbacks directly to add entities
+            platform_callbacks = enocean_data.get("platform_callbacks", {})
+            for platform_name, callback in platform_callbacks.items():
+                try:
+                    await callback(
+                        device_id,
+                        entities,
+                        rorg,
+                        rorg_func,
+                        rorg_type,
+                    )
+                except (
+                    TimeoutError,
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    LookupError,
+                    OSError,
+                ):
+                    _LOGGER.exception(
+                        "Error calling platform callback %s for device %s",
+                        platform_name,
+                        format_device_id_hex(device_id),
+                    )
+
+            # Mark device as having entities to prevent repeated rediscovery
+            usb_dongle.mark_device_has_entities(device_id)
+        else:
+            # Signal platforms without entities if profile couldn't be loaded
+            _LOGGER.warning(
+                "No entities created for device %s as EEP profile %02x-%02x-%02x could not be loaded, device has not been integrated",
+                format_device_id_hex(device_id),
+                rorg,
+                rorg_func,
+                rorg_type,
+            )
 
     # Register listener for device discovery signals
     async def _handle_device_discovered(discovery_info: DiscoveryInfo) -> None:
@@ -285,6 +287,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             hass, SIGNAL_DISCOVER_DEVICE, _handle_device_discovered
         )
     )
+
+    # Load persisted device profiles AFTER platforms and discovery listener are set up
+    # This ensures platform callbacks and discovery handlers are registered before discovery signals are dispatched
+    await usb_dongle.async_load_device_profiles()
 
     return True
 

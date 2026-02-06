@@ -8,7 +8,7 @@ from enocean.protocol.eep_metadata import load_eep_fields
 from enocean.protocol.packet import Packet
 
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, dispatcher_send
 from homeassistant.helpers.entity import Entity
@@ -67,17 +67,8 @@ class EnOceanEntity(Entity):
         if hasattr(packet, "rorg") and packet.rorg == 0xD4:
             return
 
-        # Compare packet sender integer to device id converted to integer
-        try:
-            sender_int_expected = int.from_bytes(bytes(self.dev_id), "big")
-        except (TypeError, ValueError):
-            # Fallback: if dev_id is already an int-like string, try to coerce
-            try:
-                sender_int_expected = int(str(self.dev_id))
-            except (ValueError, TypeError):
-                return
-
-        if packet.sender_int == sender_int_expected:
+        # Compare packet sender with device id
+        if packet.sender == self.dev_id:
             self.value_changed(packet)
 
     @callback
@@ -353,7 +344,7 @@ async def async_create_entities_from_eep(
 
     device_name = device_entry.name or f"enocean {format_device_id_hex(device_id)}"
     new_entities = []
-    entity_registry = er.async_get(hass)
+    seen_unique_ids = set()  # Track unique IDs to prevent duplicates
 
     entities_filtered = 0
     for ent in entities_list:
@@ -378,9 +369,15 @@ async def async_create_entities_from_eep(
             unique_id = f"{device_hex_underscore}-{unique_suffix}"
             attr_name = ent.description or ent.data_field or "Entity"
 
-            # Skip if entity already exists
-            if entity_registry.async_get_entity_id(platform_type, "enocean", unique_id):
+            # Skip if we've already created an entity with this unique ID
+            if unique_id in seen_unique_ids:
+                LOGGER.debug(
+                    "Skipping duplicate entity with unique_id %s for device %s",
+                    unique_id,
+                    format_device_id_hex(device_id),
+                )
                 continue
+            seen_unique_ids.add(unique_id)
 
             fields = await hass.async_add_executor_job(
                 load_eep_fields,

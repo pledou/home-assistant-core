@@ -349,7 +349,7 @@
           config:
             device_class: "battery"
             entity_category: "diagnostic"
-            value_template: "{{ (value_parsed / 7 * 100) | round }}"
+            value_template: "{{ (value / 7 * 100) | round }}"
   0x01:
     0x00:
       device_config:

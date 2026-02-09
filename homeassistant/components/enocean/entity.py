@@ -33,11 +33,11 @@ class EnOceanEntity(Entity):
         self.dev_id = dev_id
         # Store device display name
         self._device_name = dev_name or f"EnOcean {format_device_id_hex(self.dev_id)}"
-        # Compose full entity name from attribute name
-        # This allows using human-readable description for display
-        # while keeping stable unique_id based on data_field
-        self._attr_name = f"{attr_name or data_field}"
-        # Use data_field for unique_id to ensure stability
+        # Enable has_entity_name to compose display name from device + entity name
+        # Use attr_name (description) for human-readable display, fallback to data_field
+        self._attr_has_entity_name = True
+        self._attr_name = attr_name or data_field
+        # Use data_field for unique_id to ensure registry stability
         self._attr_unique_id = f"{format_device_id_hex_underscore(self.dev_id)}-{data_field.lower().replace(' ', '_')}"
         # Store device display name separately and expose via device_info
         self._data_field = data_field

@@ -27,24 +27,32 @@ class EnOceanEntity(Entity):
         attr_name: str | None = None,
         dev_name: str | None = None,
         dev_class: str | None = None,
+        fields: EEPEntityDef | None = None,
     ) -> None:
         """Initialize the device."""
         self.dev_id = dev_id
-        # Use attribute name for the entity short name and let Home Assistant
-        # compose the full display name from the entity name + device name by
-        # enabling `has_entity_name` on the entity.
-        self._attr_has_entity_name = True
-        self._attr_name = attr_name or data_field
-        self._attr_unique_id = f"{format_device_id_hex_underscore(self.dev_id)}-{data_field.lower().replace(' ', '_')}"
-        # Suggest object_id based on data_field (machine name) for stable entity_ids
-        suggested_suffix = data_field.lower().replace(" ", "_")
-        self._attr_suggested_object_id = f"{DOMAIN}_{format_device_id_hex_underscore(self.dev_id)}_{suggested_suffix}"
-        # Store device display name separately and expose via device_info
+        # Store device display name
         self._device_name = dev_name or f"EnOcean {format_device_id_hex(self.dev_id)}"
+        # Compose full entity name from attribute name
+        # This allows using human-readable description for display
+        # while keeping stable unique_id based on data_field
+        self._attr_name = f"{attr_name or data_field}"
+        # Use data_field for unique_id to ensure stability
+        self._attr_unique_id = f"{format_device_id_hex_underscore(self.dev_id)}-{data_field.lower().replace(' ', '_')}"
+        # Store device display name separately and expose via device_info
         self._data_field = data_field
         # Use standard attribute for device/entity class when provided
         if dev_class is not None:
             self._attr_device_class = dev_class
+
+        # Apply all properties from EEPEntityDef when provided
+        if fields is not None and isinstance(fields, EEPEntityDef):
+            if fields.icon:
+                self._attr_icon = fields.icon
+            if fields.entity_category:
+                self._attr_entity_category = fields.entity_category
+            if fields.command_template:
+                self._command_template = fields.command_template
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -411,6 +419,7 @@ class DynamicEnoceanEntity(EnOceanEntity):
             attr_name=attr_name,
             dev_name=dev_name,
             dev_class=dev_class,
+            fields=fields,
         )
 
         # Store EEP profile info for reference (parsing is done by dongle)
@@ -418,17 +427,8 @@ class DynamicEnoceanEntity(EnOceanEntity):
         self._rorg_func = rorg_func
         self._rorg_type = rorg_type
         self._fields = fields
-
-        # Apply common properties from EEPEntityDef to entity attributes
-        if fields is not None and isinstance(fields, EEPEntityDef):
-            if fields.icon:
-                self._attr_icon = fields.icon
-
-            if fields.entity_category:
-                self._attr_entity_category = fields.entity_category
-
-            if fields.command_template:
-                self._command_template = fields.command_template
+        # Note: EEPEntityDef properties (icon, entity_category, command_template)
+        # are applied in EnOceanEntity base class __init__
 
     def _get_parsed_value(self, packet, field_name: str):
         """Get a field value from the pre-parsed packet data.

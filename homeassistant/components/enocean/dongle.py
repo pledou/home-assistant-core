@@ -453,7 +453,7 @@ class EnOceanDongle:
         if not profile:
             # No known profile for this device yet
             return
-        if packet.getattr(packet, "rorg_of_eep", None) != profile["rorg"]:
+        if getattr(packet, "rorg_of_eep", None) != profile["rorg"]:
             # Packet's RORG doesn't match profile's RORG - can't parse, ex: UTE teach-in response
             return
 

@@ -183,6 +183,7 @@ class EnOceanSensor(EnOceanEntity, RestoreSensor):
         dev_id: list[int],
         dev_name: str,
         description: EnOceanSensorEntityDescription,
+        fields: EEPEntityDef | None = None,
     ) -> None:
         """Initialize the EnOcean sensor device."""
         # Convert UNDEFINED to None for attr_name
@@ -195,6 +196,15 @@ class EnOceanSensor(EnOceanEntity, RestoreSensor):
             attr_name=attr_name_value,
             dev_name=dev_name,
         )
+
+        # Apply EEPEntityDef-derived properties when provided
+        if fields is not None and isinstance(fields, EEPEntityDef):
+            if getattr(fields, "unit", None):
+                self._attr_native_unit_of_measurement = fields.unit
+
+            if state_class := getattr(fields, "state_class", None):
+                with contextlib.suppress(ValueError):
+                    self._attr_state_class = SensorStateClass(state_class)
 
     async def async_added_to_hass(self) -> None:
         """Call when entity about to be added to hass."""
@@ -333,8 +343,8 @@ class EnOceanRSSISensor(EnOceanSensor):
             state_class=SensorStateClass.MEASUREMENT,
         )
 
-        # Initialize base EnOceanSensor
-        super().__init__(dev_id, dev_name, description)
+        # Initialize base EnOceanSensor with fields parameter
+        super().__init__(dev_id, dev_name, description, fields=fields)
 
         # Store EEP identifiers for reference (though RSSI doesn't use EEP parsing)
         self._rorg = rorg

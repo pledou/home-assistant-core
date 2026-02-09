@@ -243,6 +243,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                 device_class=SensorDeviceClass.SIGNAL_STRENGTH,
                 entity_category=EntityCategory.DIAGNOSTIC,
                 state_class=SensorStateClass.MEASUREMENT,
+                unit="dBm",
             )
         )
         # Register device EEP profile with dongle for systematic packet parsing

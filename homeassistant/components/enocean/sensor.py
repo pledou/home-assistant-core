@@ -29,10 +29,16 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv, template
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DATA_ENOCEAN, LOGGER
-from .entity import DynamicEnoceanEntity, EnOceanEntity, async_create_entities_from_eep
+from .const import DATA_ENOCEAN, LOGGER, SIGNAL_RECEIVE_MESSAGE
+from .entity import (
+    DynamicEnoceanEntity,
+    EnOceanEntity,
+    async_create_entities_from_eep,
+    format_device_id_hex,
+)
 from .types import EEPEntityDef
 
 CONF_MAX_TEMP = "max_temp"
@@ -102,6 +108,41 @@ PLATFORM_SCHEMA = SENSOR_PLATFORM_SCHEMA.extend(
 )
 
 
+def _select_sensor_class(entity_def: EEPEntityDef):
+    """Select appropriate sensor class based on entity definition.
+
+    This factory function routes entities to specialized sensor classes
+    when they require custom behavior beyond the generic DynamicEnOceanSensor.
+
+    Current routing:
+    - RSSI sensors: EnOceanRSSISensor (subscribes to dongle RSSI updates)
+    - Other sensors: DynamicEnOceanSensor (generic EEP parser-based sensor)
+
+    Future extensions could route:
+    - Specific device classes needing custom state handling
+    - Sensors requiring specialized update logic
+    - Entities with complex value transformations
+
+    Args:
+        entity_def: Entity definition from EEP profile containing data_field,
+                   device_class, and other metadata
+
+    Returns:
+        The appropriate sensor class for the entity
+    """
+    # RSSI sensors use dedicated class with dongle subscription
+    if entity_def.data_field == "RSSI":
+        return EnOceanRSSISensor
+
+    # Future: Add more specialized routing here based on:
+    # - entity_def.device_class (e.g., specific handling for certain types)
+    # - entity_def.data_field patterns
+    # - entity_def.rorg/func/type combinations
+
+    # Default: Use dynamic parser for all standard sensors
+    return DynamicEnOceanSensor
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -115,7 +156,6 @@ async def async_setup_entry(
         device_id, entities_list, rorg, rorg_func, rorg_type
     ):
         """Add sensor entities for a discovered device from EEP profile."""
-
         await async_create_entities_from_eep(
             hass,
             config_entry,
@@ -127,6 +167,7 @@ async def async_setup_entry(
             platform_type="sensor",
             entity_class=DynamicEnOceanSensor,
             async_add_entities=async_add_entities,
+            entity_class_factory=_select_sensor_class,
         )
 
     # Register the callback in the platform callbacks registry
@@ -253,6 +294,75 @@ class EnOceanWindowHandle(EnOceanSensor):
         self.schedule_update_ha_state()
 
 
+class EnOceanRSSISensor(EnOceanSensor):
+    """Representation of an EnOcean RSSI (signal strength) sensor.
+
+    This sensor monitors the radio signal strength (dBm) of packets
+    received from an EnOcean device. Updates are dispatched from the
+    dongle whenever a packet is received from the device.
+    """
+
+    def __init__(
+        self,
+        dev_id: list[int],
+        dev_name: str,
+        rorg: int,
+        rorg_func: int,
+        rorg_type: int,
+        data_field: str,
+        device_class: SensorDeviceClass | str | None = None,
+        fields: EEPEntityDef | None = None,
+        attr_name: str | None = None,
+    ) -> None:
+        """Initialize the EnOcean RSSI sensor.
+
+        Args:
+            dev_id: List of device ID bytes
+            dev_name: Human-readable device name
+            rorg/rorg_func/rorg_type: EEP identifiers (stored but not used for RSSI)
+            data_field: EEP field name (should be "RSSI")
+            device_class: Device class for the sensor
+            fields: Optional preloaded fields mapping (from EEP)
+            attr_name: Optional entity attribute name
+        """
+        # Create description for EnOceanSensor base class
+        description = EnOceanSensorEntityDescription(
+            key=data_field or "RSSI",
+            name=attr_name or "Signal strength",
+            device_class=SensorDeviceClass.SIGNAL_STRENGTH,
+            state_class=SensorStateClass.MEASUREMENT,
+        )
+
+        # Initialize base EnOceanSensor
+        super().__init__(dev_id, dev_name, description)
+
+        # Store EEP identifiers for reference (though RSSI doesn't use EEP parsing)
+        self._rorg = rorg
+        self._rorg_func = rorg_func
+        self._rorg_type = rorg_type
+        self._data_field = data_field
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to RSSI updates from dongle."""
+        await super().async_added_to_hass()
+
+        # Subscribe to RSSI updates for this specific device
+        device_id_hex = format_device_id_hex(self.dev_id)
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{SIGNAL_RECEIVE_MESSAGE}_rssi_{device_id_hex}",
+                self._update_rssi,
+            )
+        )
+
+    @callback
+    def _update_rssi(self, dbm_value):
+        """Update RSSI value from dongle."""
+        self._attr_native_value = dbm_value
+        self.schedule_update_ha_state()
+
+
 class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
     """Generic dynamic sensor that parses EEP profiles using the generic Parser.
 
@@ -315,7 +425,9 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
         # Apply all EEP field properties if available
         if fields is not None and isinstance(fields, EEPEntityDef):
             if fields.unit:
-                self._unit = fields.unit
+                # `fields.unit` is normalized when the EEPEntityDef is
+                # constructed in `eep_devices` so platforms can rely on it
+                # being a Home Assistant unit constant where applicable.
                 self._attr_native_unit_of_measurement = fields.unit
 
             if fields.device_class:

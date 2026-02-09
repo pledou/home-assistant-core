@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypedDict
 
+from homeassistant.helpers.entity import EntityCategory  # type: ignore[attr-defined]
+
 
 class EepProfile(TypedDict):
     """TypedDict describing an EEP profile for discovery signals."""
@@ -63,5 +65,7 @@ class EEPEntityDef:
     offset: int | None = None
     icon: str | None = None
     state_class: str | None = None
-    entity_category: str | None = None
+    entity_category: EntityCategory | None = None
     value_template: str | None = None
+    command_template: str | None = None
+    mode: str | None = None

@@ -1,11 +1,11 @@
 """Representation of an EnOcean device."""
 
-import contextlib
 import inspect
-from typing import Any
+import json
+from typing import Any, cast
 
-from enocean.protocol.eep_metadata import load_eep_fields
-from enocean.protocol.packet import Packet
+from enocean.protocol.packet import MSCPacket, Packet
+from jinja2 import Template
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
@@ -14,7 +14,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect, dispatche
 from homeassistant.helpers.entity import Entity
 
 from .const import DOMAIN, LOGGER, SIGNAL_RECEIVE_MESSAGE, SIGNAL_SEND_MESSAGE
-from .types import EEPEntityDef, EntityType
+from .types import EEPEntityDef
 
 
 class EnOceanEntity(Entity):
@@ -36,6 +36,9 @@ class EnOceanEntity(Entity):
         self._attr_has_entity_name = True
         self._attr_name = attr_name or data_field
         self._attr_unique_id = f"{format_device_id_hex_underscore(self.dev_id)}-{data_field.lower().replace(' ', '_')}"
+        # Suggest object_id based on data_field (machine name) for stable entity_ids
+        suggested_suffix = data_field.lower().replace(" ", "_")
+        self._attr_suggested_object_id = f"{DOMAIN}_{format_device_id_hex_underscore(self.dev_id)}_{suggested_suffix}"
         # Store device display name separately and expose via device_info
         self._device_name = dev_name or f"EnOcean {format_device_id_hex(self.dev_id)}"
         self._data_field = data_field
@@ -69,17 +72,297 @@ class EnOceanEntity(Entity):
 
         # Compare packet sender with device id
         if packet.sender == self.dev_id:
+            # Check if any parsed fields are out of range
+            if self._has_out_of_range_fields(packet):
+                self._log_invalid_packet_warning(packet)
+                return
+
             self.value_changed(packet)
 
     @callback
     def value_changed(self, packet):
         """Update the internal state of the device when a packet arrives."""
 
+    def _has_out_of_range_fields(self, packet) -> bool:
+        """Check if packet has any fields with out-of-range values.
+
+        Args:
+            packet: EnOcean packet with parsed data
+
+        Returns:
+            True if any field is out of range, False otherwise
+        """
+        if not hasattr(packet, "parsed") or not packet.parsed:
+            return False
+
+        for field_data in packet.parsed.values():
+            if isinstance(field_data, dict) and field_data.get("out_of_range", False):
+                return True
+        return False
+
+    def _log_invalid_packet_warning(self, packet):
+        """Log warning for packets with out-of-range values in the same format as debug messages.
+
+        Args:
+            packet: EnOcean packet with invalid data
+        """
+        try:
+            # Format sender and destination addresses
+            sender = format_device_id_hex(
+                packet.sender if hasattr(packet, "sender") else self.dev_id
+            )
+            destination = (
+                format_device_id_hex(packet.destination)
+                if hasattr(packet, "destination")
+                else "FF:FF:FF:FF"
+            )
+
+            # Get signal strength if available
+            dbm = packet.dBm if hasattr(packet, "dBm") else 0
+
+            # Format packet data and optional bytes
+            packet_type = (
+                f"0x{packet.packet_type:02x}"
+                if hasattr(packet, "packet_type")
+                else "0x01"
+            )
+            data_hex = (
+                [f"0x{b:x}" for b in packet.data]
+                if hasattr(packet, "data") and packet.data
+                else []
+            )
+            optional_hex = (
+                [f"0x{b:x}" for b in packet.optional]
+                if hasattr(packet, "optional") and packet.optional
+                else []
+            )
+
+            # Format parsed data
+            parsed_values = {}
+            if packet.parsed:
+                for field_name, field_data in packet.parsed.items():
+                    if isinstance(field_data, dict):
+                        parsed_values[field_name] = field_data.get(
+                            "value", field_data.get("raw_value")
+                        )
+                    else:
+                        parsed_values[field_name] = field_data
+
+            LOGGER.warning(
+                "Ignoring packet with out-of-range values - %s->%s (%d dBm) rorg %s : %s %s %s %s",
+                sender,
+                destination,
+                dbm,
+                packet.getattr(packet, "rorg_of_eep", None),
+                packet_type,
+                data_hex,
+                optional_hex,
+                parsed_values,
+            )
+        except Exception as err:  # noqa: BLE001
+            LOGGER.debug("Error formatting invalid packet warning: %s", err)
+
     def send_command(self, data, optional, packet_type):
         """Send a command via the EnOcean dongle."""
 
         packet = Packet(packet_type, data=data, optional=optional)
+
+        LOGGER.debug(
+            "Created packet for %s: type=0x%02x, data_length=%d, optional_length=%d, packet=%s",
+            format_device_id_hex(self.dev_id),
+            packet_type,
+            len(data) if data else 0,
+            len(optional) if optional else 0,
+            packet,
+        )
+
         dispatcher_send(self.hass, SIGNAL_SEND_MESSAGE, packet)
+
+    def _send_message(
+        self,
+        command_template: str | None = None,
+        template_vars: dict[str, Any] | None = None,
+        rorg: int | None = None,
+        func: int | None = None,
+        type_: int | None = None,
+    ) -> None:
+        """Send a message using command_template with Jinja2 rendering.
+
+        Args:
+            command_template: Jinja2 template string for command payload
+            template_vars: Variables to pass to template (e.g., {'value': 50})
+            rorg: RORG byte for the packet
+            func: FUNC byte for the packet
+            type_: TYPE byte for the packet
+        """
+        if not command_template:
+            LOGGER.warning("No command_template provided for %s", self._attr_unique_id)
+            return
+
+        try:
+            # Render the Jinja2 template
+            template = Template(command_template)
+            rendered = template.render(template_vars or {})
+
+            LOGGER.debug(
+                "Rendered command_template for %s: %s",
+                format_device_id_hex(self.dev_id),
+                rendered,
+            )
+
+            # Parse JSON result
+            try:
+                command_data = json.loads(rendered)
+            except json.JSONDecodeError as err:
+                LOGGER.error(
+                    "Failed to parse command_template output as JSON for %s: %s",
+                    self._attr_unique_id,
+                    err,
+                )
+                return
+
+            LOGGER.debug(
+                "Parsed command data for %s: %s",
+                format_device_id_hex(self.dev_id),
+                command_data,
+            )
+
+            # Check if this is an MSC packet (VentilAirSec)
+            # MSC packets are identified by the presence of MSC field or by rorg=0xD1079
+            is_msc = "MSC" in command_data or (rorg is not None and rorg == 0xD1079)
+
+            if is_msc:
+                # Build MSC packet using MSCPacket constructor
+                # VentilAirSec uses manufacturer 0x079
+                manufacturer = 0x079
+
+                # Extract command from 'command' (lowercase) or 'CMD' field
+                cmd = command_data.get("command") or command_data.get("CMD")
+                if cmd is None:
+                    LOGGER.warning(
+                        "No command field in MSC command_template output for %s",
+                        self._attr_unique_id,
+                    )
+                    return
+
+                # Get sender ID from dongle; be defensive because some entity
+                # instances may not have a `coordinator` attribute in tests
+                # or during early setup. If unavailable, log and abort.
+                coordinator = getattr(self, "coordinator", None)
+                if coordinator is None or not hasattr(coordinator, "dongle"):
+                    LOGGER.warning(
+                        "Cannot create MSC packet for %s: coordinator/dongle unavailable",
+                        self._attr_unique_id,
+                    )
+                    return
+                sender = coordinator.dongle.base_id
+
+                # Prepare kwargs with all fields except MSC, command, send
+                kwargs = {
+                    k: v
+                    for k, v in command_data.items()
+                    if k not in ("MSC", "command", "CMD", "send")
+                }
+
+                LOGGER.debug(
+                    "Creating MSC packet for %s: manufacturer=0x%03x, cmd=%s, kwargs=%s",
+                    format_device_id_hex(self.dev_id),
+                    manufacturer,
+                    cmd,
+                    kwargs,
+                )
+
+                # Create MSC packet using constructor
+                packet = MSCPacket(
+                    manufacturer=manufacturer,
+                    command=int(cmd),
+                    destination=self.dev_id,
+                    sender=sender,
+                    **kwargs,
+                )
+                LOGGER.info(
+                    "Sending MSC command to %s: manufacturer=0x%03x, cmd=%s, data=%s (hex: %s)",
+                    format_device_id_hex(self.dev_id),
+                    manufacturer,
+                    cmd,
+                    packet.data,
+                    "".join(f"{b:02x}" for b in packet.data),
+                )
+                # Send using dispatcher
+                dispatcher_send(self.hass, SIGNAL_SEND_MESSAGE, packet)
+                LOGGER.info(
+                    "MSC command sent successfully to %s: CMD=%s",
+                    format_device_id_hex(self.dev_id),
+                    cmd,
+                )
+
+            else:
+                # Non-MSC packet handling (original logic)
+                # Extract command ID if present
+                cmd = command_data.get("CMD")
+                if cmd is None:
+                    LOGGER.warning(
+                        "No CMD field in command_template output for %s",
+                        self._attr_unique_id,
+                    )
+                    return
+
+                # Build packet data array from command_data
+                # Start with RORG, FUNC, TYPE if provided
+                data = []
+                if rorg is not None:
+                    data.append(rorg & 0xFF)
+                if func is not None:
+                    data.append(func & 0xFF)
+                if type_ is not None:
+                    data.append(type_ & 0xFF)
+
+                # Add CMD
+                data.append(int(cmd) & 0xFF)
+
+                # Add other fields from command_data in order
+                # This is a simplified approach - a full implementation would use EEP field definitions
+                for key, value in command_data.items():
+                    if key not in ("CMD", "send"):
+                        try:
+                            data.append(int(value) & 0xFF)
+                        except (ValueError, TypeError):
+                            LOGGER.debug(
+                                "Skipping non-numeric field %s in command data", key
+                            )
+
+                # Build optional bytes (destination address)
+                optional = [0x03]
+                optional.extend(self.dev_id)
+                optional.extend([0xFF, 0x00])
+
+                LOGGER.info(
+                    "Sending command to %s: packet_type=0x%02x, data=%s (hex: %s), optional=%s (hex: %s), rorg=0x%02x, func=0x%02x, type=0x%02x",
+                    format_device_id_hex(self.dev_id),
+                    0x01,
+                    data,
+                    "".join(f"{b:02x}" for b in data),
+                    optional,
+                    "".join(f"{b:02x}" for b in optional),
+                    rorg or 0,
+                    func or 0,
+                    type_ or 0,
+                )
+
+                # Send the packet
+                self.send_command(data=data, optional=optional, packet_type=0x01)
+
+                LOGGER.info(
+                    "Command sent successfully to %s: CMD=%s, total_data_bytes=%d",
+                    format_device_id_hex(self.dev_id),
+                    cmd,
+                    len(data),
+                )
+
+        except Exception as err:  # noqa: BLE001
+            LOGGER.exception(
+                "Error sending message for %s: %s", self._attr_unique_id, err
+            )
 
 
 def format_device_id_hex(dev_id: list[int]) -> str:
@@ -142,7 +425,10 @@ class DynamicEnoceanEntity(EnOceanEntity):
                 self._attr_icon = fields.icon
 
             if fields.entity_category:
-                self._attr_entity_category = fields.entity_category  # type: ignore[assignment]
+                self._attr_entity_category = fields.entity_category
+
+            if fields.command_template:
+                self._command_template = fields.command_template
 
     def _get_parsed_value(self, packet, field_name: str):
         """Get a field value from the pre-parsed packet data.
@@ -155,7 +441,7 @@ class DynamicEnoceanEntity(EnOceanEntity):
             field_name: Name of the field to extract
 
         Returns:
-            Field value or None if not found
+            Field value or None if not found or out of range
         """
         if not packet.parsed:
             LOGGER.debug(
@@ -177,108 +463,27 @@ class DynamicEnoceanEntity(EnOceanEntity):
             return None
         else:
             if isinstance(field_data, dict):
-                return field_data.get("raw_value", field_data.get("value"))
+                # Check if value is out of range and skip it
+                if field_data.get("out_of_range", False):
+                    LOGGER.warning(
+                        "Ignoring out-of-range value for field %s on device %s (raw_value=%s)",
+                        field_name,
+                        format_device_id_hex(self.dev_id),
+                        field_data.get("raw_value"),
+                    )
+                    return None
+                # For numeric fields with scaling, prefer "value" (scaled)
+                # For enums, "value" might be a string description, so use "raw_value"
+                if "value" in field_data:
+                    value = field_data["value"]
+                    # If value is numeric (scaled field), use it
+                    if isinstance(value, (int, float)):
+                        return value
+                    # If value is string (enum description), use raw_value instead
+                    return field_data.get("raw_value", value)
+                # Fallback to raw_value if no value field
+                return field_data.get("raw_value")
             return field_data
-
-
-def _build_eep_fields_obj(
-    hass: HomeAssistant,
-    ent,
-    fields,
-    rorg: int,
-    rorg_func: int,
-    rorg_type: int,
-    unique_id: str,
-) -> EEPEntityDef | None:
-    """Build EEPEntityDef from loaded EEP fields metadata.
-
-    Converts fields returned by load_eep_fields into an EEPEntityDef dataclass
-    for consistent access to min_value, max_value, unit across different formats.
-    This function is synchronous since it only manipulates in-memory data
-    returned by `load_eep_fields` which is executed in the executor.
-    """
-    fields_obj = None
-    try:
-        if not fields:
-            return None
-
-        # Attempt to locate metadata for the specific data_field
-        # Expect `fields` to be an object-like metadata container; use
-        # attribute access to obtain the metadata for the requested field.
-        meta = getattr(fields, ent.data_field, None)
-
-        # Extract min/max/unit values based on meta type
-        min_v, max_v, unit_v, enum_opts, offset_v = _extract_field_metadata(meta)
-
-        # Normalize entity_type
-        entity_type = _normalize_entity_type(ent)
-
-        fields_obj = EEPEntityDef(
-            description=ent.description,
-            rorg=rorg,
-            rorg_func=rorg_func,
-            rorg_type=rorg_type,
-            data_field=ent.data_field,
-            entity_type=entity_type,
-            unit=unit_v or ent.unit,
-            device_class=ent.device_class,
-            min_value=(None if min_v is None else float(min_v)),
-            max_value=(None if max_v is None else float(max_v)),
-            enum_options=enum_opts or ent.enum_options,
-            offset=offset_v,
-        )
-        # Attach original raw fields mapping to the dataclass instance
-        # so callers that need the full EEP mapping (dict) can access it
-        # via `raw_fields` when only the dataclass is provided.
-        with contextlib.suppress(Exception):
-            setattr(fields_obj, "raw_fields", fields)
-    except (AttributeError, KeyError, TypeError, ValueError) as err:
-        # Log at debug level and leave fields_obj as None if metadata
-        # extraction or conversion fails
-        LOGGER.debug(
-            "Failed to build fields_obj for %s: %s",
-            unique_id,
-            err,
-        )
-        fields_obj = None
-
-    return fields_obj
-
-
-def _extract_field_metadata(meta):
-    """Extract min_v, max_v, unit_v, enum_opts, offset_v from metadata."""
-    min_v = max_v = unit_v = enum_opts = offset_v = None
-
-    if meta and isinstance(meta, dict):
-        min_v = meta.get("min_value") or meta.get("min") or meta.get("minimum")
-        max_v = meta.get("max_value") or meta.get("max") or meta.get("maximum")
-        unit_v = meta.get("unit") or meta.get("units")
-        enum_opts = meta.get("enum_options") or meta.get("enum")
-        offset_v = meta.get("offset")
-    elif meta:
-        # If meta is not a dict, try attribute names
-        min_v = getattr(meta, "min_value", None)
-        max_v = getattr(meta, "max_value", None)
-        unit_v = getattr(meta, "unit", None)
-        enum_opts = getattr(meta, "enum_options", None)
-        offset_v = getattr(meta, "offset", None)
-
-    return min_v, max_v, unit_v, enum_opts, offset_v
-
-
-def _normalize_entity_type(ent) -> EntityType:
-    """Normalize entity_type to EntityType enum."""
-    entity_type = getattr(ent, "entity_type", EntityType.SENSOR)
-    if entity_type is None:
-        entity_type = EntityType.SENSOR
-    elif isinstance(entity_type, str):
-        # Convert string to EntityType enum
-        try:
-            entity_type = EntityType(entity_type)
-        except ValueError:
-            entity_type = EntityType.SENSOR
-
-    return entity_type
 
 
 async def async_create_entities_from_eep(
@@ -293,6 +498,7 @@ async def async_create_entities_from_eep(
     entity_class,
     async_add_entities,
     entity_kwargs_factory=None,
+    entity_class_factory=None,
 ) -> None:
     """Factory function to create entities from EEP definitions.
 
@@ -310,9 +516,11 @@ async def async_create_entities_from_eep(
         entities_list: List of EEPEntityDef objects
         rorg, func, type_: EEP profile identifiers
         platform_type: Entity platform ("sensor", "binary_sensor", etc.)
-        entity_class: The entity class to instantiate
+        entity_class: The default entity class to instantiate
         async_add_entities: Callback to add entities
-        entity_kwargs_factory: Optional callable(ent, device_id, device_name, rorg_int, func_int, type_int, description) -> dict of extra kwargs
+        entity_kwargs_factory: Optional callable(ent) -> dict of extra kwargs
+        entity_class_factory: Optional callable(ent) -> entity class. If provided,
+            overrides entity_class for each entity based on its definition.
     """
 
     if not entities_list:
@@ -374,26 +582,16 @@ async def async_create_entities_from_eep(
                 continue
             seen_unique_ids.add(unique_id)
 
-            fields = await hass.async_add_executor_job(
-                load_eep_fields,
-                f"0x{rorg:X}",
-                f"0x{rorg_func:02X}",
-                f"0x{rorg_type:02X}",
-            )
-
-            # Build fields_obj from loaded fields (synchronous)
-            fields_obj = _build_eep_fields_obj(
-                hass, ent, fields, rorg, rorg_func, rorg_type, unique_id
-            )
+            fields_for_kwargs = ent
 
             # Build entity kwargs
-            entity_kwargs = {
+            entity_kwargs: dict[str, Any] = {
                 "data_field": ent.data_field,
                 "device_class": ent.device_class,
                 "rorg": rorg,
                 "rorg_func": rorg_func,
                 "rorg_type": rorg_type,
-                "fields": fields_obj or fields,
+                "fields": fields_for_kwargs,
             }
 
             if attr_name:
@@ -401,7 +599,7 @@ async def async_create_entities_from_eep(
 
             # Add enum_options if available (for select entities)
             if hasattr(ent, "enum_options") and ent.enum_options:
-                entity_kwargs["enum_options"] = ent.enum_options
+                entity_kwargs["enum_options"] = cast(Any, ent.enum_options)
 
             # Add platform-specific kwargs
             if entity_kwargs_factory:
@@ -415,8 +613,14 @@ async def async_create_entities_from_eep(
             # for any required positional parameters to avoid passing the
             # same argument both positionally and via kwargs which can
             # raise a TypeError in some subclass __init__ implementations.
+
+            # Select the appropriate entity class using factory if provided
+            selected_entity_class = (
+                entity_class_factory(ent) if entity_class_factory else entity_class
+            )
+
             try:
-                sig = inspect.signature(entity_class.__init__)
+                sig = inspect.signature(selected_entity_class.__init__)
                 # parameter list excluding 'self'
                 params = list(sig.parameters.values())[1:]
                 param_names = [p.name for p in params]
@@ -454,8 +658,8 @@ async def async_create_entities_from_eep(
                 if (not param_names) or (k in param_names)
             }
 
-            # Create the entity using constructed args/kwargs
-            entity_obj = entity_class(*positional_args, **filtered_kwargs)
+            # Create the entity using constructed args/kwargs with selected class
+            entity_obj = selected_entity_class(*positional_args, **filtered_kwargs)
             new_entities.append(entity_obj)
 
         except (FileNotFoundError, OSError, ValueError, TypeError) as err:

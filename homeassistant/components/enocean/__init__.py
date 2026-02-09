@@ -7,18 +7,20 @@ from typing import cast
 from enocean.protocol.eep import get_eep as _get_eep
 import voluptuous as vol
 
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import CONF_DEVICE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import EntityCategory  # type: ignore[attr-defined]
 from homeassistant.helpers.typing import ConfigType
 
 from .const import DATA_ENOCEAN, DOMAIN, ENOCEAN_DONGLE, PLATFORMS
 from .dongle import SIGNAL_DISCOVER_DEVICE, EnOceanDongle
 from .eep_devices import get_entities_for_device
 from .entity import format_device_id_hex, format_device_id_hex_underscore
-from .types import DiscoveryInfo, EEPEntityDef, EepProfile
+from .types import DiscoveryInfo, EEPEntityDef, EepProfile, EntityType
 
 # Registry for platform entity add callbacks
 PLATFORM_ADD_ENTITIES_CALLBACKS: dict[
@@ -221,61 +223,73 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             ),
         )
 
-        if entities:
-            # Register device EEP profile with dongle for systematic packet parsing
-            usb_dongle.register_device_profile(device_id, rorg, rorg_func, rorg_type)
-
-            # Create or update device in registry
-            if not existing_device:
-                device_registry.async_get_or_create(
-                    config_entry_id=config_entry.entry_id,
-                    identifiers={(DOMAIN, format_device_id_hex_underscore(device_id))},
-                    name=f"{DOMAIN} {format_device_id_hex(device_id)}",
-                    manufacturer="EnOcean",
-                    model=f"0x{rorg:02x} (func=0x{(rorg_func or 0):02x}, type=0x{rorg_type:02x})",
-                )
-
-            def _ent_val(ent, key):
-                if isinstance(ent, dict):
-                    return ent.get(key)
-                return getattr(ent, key, None)
-
-            # Call registered platform callbacks directly to add entities
-            platform_callbacks = enocean_data.get("platform_callbacks", {})
-            for platform_name, callback in platform_callbacks.items():
-                try:
-                    await callback(
-                        device_id,
-                        entities,
-                        rorg,
-                        rorg_func,
-                        rorg_type,
-                    )
-                except (
-                    TimeoutError,
-                    RuntimeError,
-                    ValueError,
-                    TypeError,
-                    LookupError,
-                    OSError,
-                ):
-                    _LOGGER.exception(
-                        "Error calling platform callback %s for device %s",
-                        platform_name,
-                        format_device_id_hex(device_id),
-                    )
-
-            # Mark device as having entities to prevent repeated rediscovery
-            usb_dongle.mark_device_has_entities(device_id)
-        else:
-            # Signal platforms without entities if profile couldn't be loaded
+        if entities is None:
+            entities = []
             _LOGGER.warning(
-                "No entities created for device %s as EEP profile %02x-%02x-%02x could not be loaded, device has not been integrated",
+                "No entities created except signal strength for device %s as EEP profile %02x-%02x-%02x could not be loaded",
                 format_device_id_hex(device_id),
                 rorg,
                 rorg_func,
                 rorg_type,
             )
+        entities.append(
+            EEPEntityDef(
+                description="Signal strength",
+                rorg=rorg,
+                rorg_func=rorg_func,
+                rorg_type=rorg_type,
+                data_field="RSSI",
+                entity_type=EntityType.SENSOR,
+                device_class=SensorDeviceClass.SIGNAL_STRENGTH,
+                entity_category=EntityCategory.DIAGNOSTIC,
+                state_class=SensorStateClass.MEASUREMENT,
+            )
+        )
+        # Register device EEP profile with dongle for systematic packet parsing
+        usb_dongle.register_device_profile(device_id, rorg, rorg_func, rorg_type)
+
+        # Create or update device in registry
+        if not existing_device:
+            device_registry.async_get_or_create(
+                config_entry_id=config_entry.entry_id,
+                identifiers={(DOMAIN, format_device_id_hex_underscore(device_id))},
+                name=f"{DOMAIN} {format_device_id_hex(device_id)}",
+                manufacturer="EnOcean",
+                model=f"0x{rorg:02x} (func=0x{(rorg_func or 0):02x}, type=0x{rorg_type:02x})",
+            )
+
+        def _ent_val(ent, key):
+            if isinstance(ent, dict):
+                return ent.get(key)
+            return getattr(ent, key, None)
+
+        # Call registered platform callbacks directly to add entities
+        platform_callbacks = enocean_data.get("platform_callbacks", {})
+        for platform_name, callback in platform_callbacks.items():
+            try:
+                await callback(
+                    device_id,
+                    entities,
+                    rorg,
+                    rorg_func,
+                    rorg_type,
+                )
+            except (
+                TimeoutError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+                LookupError,
+                OSError,
+            ):
+                _LOGGER.exception(
+                    "Error calling platform callback %s for device %s",
+                    platform_name,
+                    format_device_id_hex(device_id),
+                )
+
+        # Mark device as having entities to prevent repeated rediscovery
+        usb_dongle.mark_device_has_entities(device_id)
 
     # Register listener for device discovery signals
     async def _handle_device_discovered(discovery_info: DiscoveryInfo) -> None:

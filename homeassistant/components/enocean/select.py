@@ -173,6 +173,38 @@ class DynamicEnOceanSelect(DynamicEnoceanEntity, EnOceanSelect):
             attr_name=attr_name,
         )
 
+        # Store command template for sending selected option when available
+        if fields is not None and isinstance(fields, EEPEntityDef):
+            if fields.command_template is not None:
+                self._command_template = fields.command_template
+
+    async def async_select_option(self, option: str) -> None:
+        """Select an option and send command to device if template available."""
+        if option not in self._attr_options:
+            return
+
+        if self._command_template:
+            # Find the numeric value for the selected option
+            option_index = self._attr_options.index(option)
+
+            # Send command using the template
+            await self.hass.async_add_executor_job(
+                self._send_message,
+                self._command_template,
+                {
+                    "value": option_index,
+                    "option": option,
+                    "device_id": self.dev_id,
+                    "data_field": self._data_field,
+                },
+                self._rorg,
+                self._rorg_func,
+                self._rorg_type,
+            )
+
+        self._current_option = option
+        self.async_write_ha_state()
+
     @callback
     def value_changed(self, packet: Any) -> None:
         """Update current option based on incoming packet using parser when available."""

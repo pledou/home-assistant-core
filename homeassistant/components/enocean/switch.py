@@ -250,6 +250,55 @@ class DynamicEnOceanSwitch(DynamicEnoceanEntity, EnOceanSwitch):
         ):
             self._attr_device_class = fields.device_class  # type: ignore[assignment]
 
+        # Store command template for sending commands when available
+        if fields is not None and isinstance(fields, EEPEntityDef):
+            if fields.command_template is not None:
+                self._command_template = fields.command_template
+
+    def turn_on(self, **kwargs: Any) -> None:
+        """Turn on the switch."""
+        if self._command_template:
+            # Use command template to send turn_on command
+            self._send_message(
+                self._command_template,
+                {
+                    "value": 1,
+                    "state": "on",
+                    "device_id": self.dev_id,
+                    "channel": self.channel or 0,
+                },
+                self._rorg,
+                self._rorg_func,
+                self._rorg_type,
+            )
+            self._attr_is_on = True
+            self.async_write_ha_state()
+        else:
+            # Fallback to base implementation
+            super().turn_on(**kwargs)
+
+    def turn_off(self, **kwargs: Any) -> None:
+        """Turn off the switch."""
+        if self._command_template:
+            # Use command template to send turn_off command
+            self._send_message(
+                self._command_template,
+                {
+                    "value": 0,
+                    "state": "off",
+                    "device_id": self.dev_id,
+                    "channel": self.channel or 0,
+                },
+                self._rorg,
+                self._rorg_func,
+                self._rorg_type,
+            )
+            self._attr_is_on = False
+            self.async_write_ha_state()
+        else:
+            # Fallback to base implementation
+            super().turn_off(**kwargs)
+
     @callback
     def value_changed(self, packet):
         """Prefer parsed values via parser/fields, fallback to base implementation."""

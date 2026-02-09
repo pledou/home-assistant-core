@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
+
 from enocean.protocol.eep_metadata import get_field_value_with_enum
 
 from homeassistant.components.number import RestoreNumber
@@ -10,8 +12,13 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DATA_ENOCEAN, DOMAIN, ENOCEAN_DONGLE
-from .entity import DynamicEnoceanEntity, EnOceanEntity, async_create_entities_from_eep
+from .const import DATA_ENOCEAN, DOMAIN, ENOCEAN_DONGLE, LOGGER
+from .entity import (
+    DynamicEnoceanEntity,
+    EnOceanEntity,
+    async_create_entities_from_eep,
+    format_device_id_hex,
+)
 from .types import EEPEntityDef
 
 
@@ -138,11 +145,15 @@ class DynamicEnOceanNumber(DynamicEnoceanEntity, EnOceanNumber):
         extracted_min = None
         extracted_max = None
         extracted_unit = None
+        extracted_command_template = None
+        extracted_mode = None
 
         if fields is not None and isinstance(fields, EEPEntityDef):
             extracted_min = fields.min_value
             extracted_max = fields.max_value
             extracted_unit = fields.unit
+            extracted_command_template = fields.command_template
+            extracted_mode = fields.mode
 
             # Apply number-specific device_class if available
             if fields.device_class:
@@ -159,9 +170,72 @@ class DynamicEnOceanNumber(DynamicEnoceanEntity, EnOceanNumber):
         elif extracted_max is not None:
             self._attr_native_max_value = extracted_max
 
-        self._attr_native_unit_of_measurement = (
-            unit if unit is not None else extracted_unit
-        )
+        # Only assign unit if a non-None value is available to avoid
+        # assigning `None` to attributes that expect `str`.
+        if unit is not None:
+            self._attr_native_unit_of_measurement = unit
+        elif extracted_unit is not None:
+            self._attr_native_unit_of_measurement = extracted_unit
+
+        # Apply mode if available from fields
+        if extracted_mode:
+            self._attr_mode = extracted_mode  # type: ignore[assignment]
+
+        # Store command template for sending values to device if present
+        if extracted_command_template is not None:
+            self._command_template = extracted_command_template
+
+        # Debug: surface whether a command_template was discovered and some
+        # surrounding context to aid troubleshooting when sending values.
+        # Best-effort debug information; don't raise on logging issues
+        with suppress(Exception):
+            LOGGER.debug(
+                "EnOcean number init %s: command_template_found=%s, rorg=0x%02x, func=0x%02x, type=0x%02x, data_field=%s, fields_present=%s",
+                self._attr_unique_id,
+                bool(self._command_template),
+                rorg,
+                rorg_func,
+                rorg_type,
+                data_field,
+                "yes" if fields is not None else "no",
+            )
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set new value and send command to device if template available."""
+        if self._command_template:
+            # Send command using the template
+            await self.hass.async_add_executor_job(
+                self._send_message,
+                self._command_template,
+                {
+                    "value": value,
+                    "device_id": self.dev_id,
+                    "data_field": self._data_field,
+                },
+                self._rorg,
+                self._rorg_func,
+                self._rorg_type,
+            )
+
+            # Update local state
+            self._attr_native_value = value
+            self.async_write_ha_state()
+        else:
+            # Provide richer context to help debug why sending is skipped
+            has_fields = self._fields is not None
+            raw_fields_info = getattr(self._fields, "raw_fields", None)
+            with suppress(Exception):
+                LOGGER.debug(
+                    "No command_template configured for %s (device=%s). Cannot send value. rorg=0x%02x, func=0x%02x, type=0x%02x, data_field=%s, has_fields=%s, raw_fields=%s",
+                    self._attr_unique_id,
+                    format_device_id_hex(self.dev_id),
+                    self._rorg or 0,
+                    self._rorg_func or 0,
+                    self._rorg_type or 0,
+                    self._data_field,
+                    has_fields,
+                    bool(raw_fields_info),
+                )
 
     @callback
     def value_changed(self, packet) -> None:

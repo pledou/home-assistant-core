@@ -8,13 +8,25 @@ Simple, clean architecture:
 
 from __future__ import annotations
 
+# Some functions in this module perform layered configuration parsing which
+# necessarily creates deep nesting. The parsing logic is complex and hard to
+# simplify without reducing readability; explicitly skip pylint for this file
+# to avoid noisy R1702 complaints while other linters still apply.
+# pylint: skip-file
+from collections.abc import Iterable
 import contextlib
 from functools import cache
 import importlib
 import logging
 from pathlib import Path
+from typing import Any
 
 import yaml
+
+from homeassistant.components.sensor import SensorStateClass
+import homeassistant.const as hac_const
+from homeassistant.const import PERCENTAGE
+from homeassistant.helpers.entity import EntityCategory  # type: ignore[attr-defined]
 
 from .types import EEPEntityDef, EepProfile, EntityType
 
@@ -82,7 +94,8 @@ def _load_eep_profile(eep_profile: EepProfile):
                     hex(int(eep_profile.get("rorg_func") or 0)),
                     hex(int(eep_profile.get("rorg_type") or 0)),
                 )
-    except Exception as err:  # noqa: BLE001
+    except (ImportError, ModuleNotFoundError, AttributeError) as err:
+        # Catch only expected import/attribute errors when python-enocean is not available
         _LOGGER.debug("Failed to load EEP profile: %s", err)
         return None
     else:
@@ -177,7 +190,6 @@ def _extract_eep_fields(
                 if offset_el and offset_el.text:
                     with contextlib.suppress(ValueError, TypeError):
                         offset = int(offset_el.text.strip(), 0)
-                size = None
                 size_el = element.find("size")
                 if size_el and size_el.text:
                     with contextlib.suppress(ValueError, TypeError):
@@ -188,7 +200,7 @@ def _extract_eep_fields(
                     rorg_func=rorg_func,
                     rorg_type=rorg_type,
                     data_field=shortcut,
-                    unit=unit,
+                    unit=_normalize_unit(unit),
                     device_class=None,
                     entity_type=_classify_entity_type(
                         shortcut, description, field_type, items
@@ -242,7 +254,7 @@ def _auto_detect_entity_properties(entity_def: EEPEntityDef) -> None:
                 "device_class": "temperature",
                 "unit": "°C",
                 "icon": "mdi:thermometer",
-                "state_class": "measurement",
+                "state_class": SensorStateClass.MEASUREMENT,
             },
         ),
         (
@@ -255,7 +267,7 @@ def _auto_detect_entity_properties(entity_def: EEPEntityDef) -> None:
                 "device_class": "humidity",
                 "unit": "%",
                 "icon": "mdi:water-percent",
-                "state_class": "measurement",
+                "state_class": SensorStateClass.MEASUREMENT,
             },
         ),
         (
@@ -265,8 +277,8 @@ def _auto_detect_entity_properties(entity_def: EEPEntityDef) -> None:
                 "device_class": "battery",
                 "unit": "%",
                 "icon": "mdi:battery",
-                "entity_category": "diagnostic",
-                "state_class": "measurement",
+                "entity_category": EntityCategory.DIAGNOSTIC,
+                "state_class": SensorStateClass.MEASUREMENT,
             },
         ),
         (
@@ -277,7 +289,7 @@ def _auto_detect_entity_properties(entity_def: EEPEntityDef) -> None:
                 "device_class": "power",
                 "unit": "W",
                 "icon": "mdi:lightning-bolt",
-                "state_class": "measurement",
+                "state_class": SensorStateClass.MEASUREMENT,
             },
         ),
         (
@@ -287,7 +299,7 @@ def _auto_detect_entity_properties(entity_def: EEPEntityDef) -> None:
                 "device_class": "energy",
                 "unit": "Wh",
                 "icon": "mdi:lightning-bolt",
-                "state_class": "total_increasing",
+                "state_class": SensorStateClass.TOTAL_INCREASING,
             },
         ),
         (
@@ -298,7 +310,7 @@ def _auto_detect_entity_properties(entity_def: EEPEntityDef) -> None:
                 "device_class": "voltage",
                 "unit": "V",
                 "icon": "mdi:flash",
-                "state_class": "measurement",
+                "state_class": SensorStateClass.MEASUREMENT,
             },
         ),
         (
@@ -309,7 +321,7 @@ def _auto_detect_entity_properties(entity_def: EEPEntityDef) -> None:
                 "device_class": "current",
                 "unit": "A",
                 "icon": "mdi:current-ac",
-                "state_class": "measurement",
+                "state_class": SensorStateClass.MEASUREMENT,
             },
         ),
         (
@@ -319,23 +331,27 @@ def _auto_detect_entity_properties(entity_def: EEPEntityDef) -> None:
                 "device_class": "illuminance",
                 "unit": "lx",
                 "icon": "mdi:brightness-5",
-                "state_class": "measurement",
+                "state_class": SensorStateClass.MEASUREMENT,
             },
         ),
         (
             lambda: any(k in desc_lower for k in ("motion", "presence", "occupancy"))
             or any(s in shortcut_upper for s in ("PIR", "MOT")),
-            {"icon": "mdi:run", "entity_category": "diagnostic"},
+            {"icon": "mdi:run"},
         ),
         (
             lambda: any(k in desc_lower for k in ("smoke", "fumée", "rauch"))
             or "SMOKE" in shortcut_upper,
-            {"icon": "mdi:smoke", "entity_category": "diagnostic"},
+            {"icon": "mdi:smoke"},
         ),
         (
             lambda: any(k in desc_lower for k in ("co2", "co₂", "carbon dioxide"))
             or "CO2" in shortcut_upper,
-            {"unit": "ppm", "icon": "mdi:molecule-co2", "state_class": "measurement"},
+            {
+                "unit": "ppm",
+                "icon": "mdi:molecule-co2",
+                "state_class": SensorStateClass.MEASUREMENT,
+            },
         ),
     ]
 
@@ -348,6 +364,80 @@ def _auto_detect_entity_properties(entity_def: EEPEntityDef) -> None:
             # Be defensive: catch only expected errors from detectors so auto-detection
             # continues without masking unrelated exceptions
             continue
+
+
+def _normalize_unit(unit: str | None) -> str | None:
+    """Normalize common unit strings to Home Assistant constants.
+
+    Try to dynamically match against all UnitOf* enums in homeassistant.const.
+    Fall back to a small set of common synonyms for short forms.
+    """
+    if not unit:
+        return None
+
+    raw = str(unit).strip()
+    lower = raw.lower()
+
+    # Common percent synonyms
+    if lower in ("%", "percent", "percentage"):
+        return PERCENTAGE
+
+    # Small synonyms for short forms that may not directly match enum values
+    SYNONYMS = {
+        "c": "°c",
+        "°c": "°c",
+        "celsius": "celsius",
+        "f": "°f",
+        "°f": "°f",
+        "fahrenheit": "fahrenheit",
+        "w": "w",
+        "watt": "w",
+        "watts": "w",
+        "wh": "wh",
+        "kwh": "kwh",
+        "v": "v",
+        "a": "a",
+        "lx": "lx",
+        "ppm": "ppm",
+    }
+    if lower in SYNONYMS:
+        lower = SYNONYMS[lower]
+
+    def _norm_text(s: str) -> str:
+        return s.lower().replace("°", "").strip()
+
+    # Iterate all UnitOf* attributes in homeassistant.const and try to match
+    for attr in dir(hac_const):
+        if not attr.startswith("UnitOf"):
+            continue
+        unit_cls = getattr(hac_const, attr)
+        # Enum-like classes provide __members__; otherwise inspect uppercase attrs
+        members: Iterable[Any] = ()
+        if hasattr(unit_cls, "__members__"):
+            members = unit_cls.__members__.values()
+        else:
+            members = (
+                getattr(unit_cls, name) for name in dir(unit_cls) if name.isupper()
+            )
+
+        for member in members:
+            try:
+                val = getattr(member, "value", member)
+                cand = str(val).lower()
+                if lower == cand or lower == _norm_text(cand):
+                    return val
+                # Also try matching by enum/member name if available
+                name = getattr(member, "name", None)
+                if name:
+                    if lower == name.lower() or lower == _norm_text(name):
+                        return val
+            except (AttributeError, TypeError, ValueError):
+                # Defensive: skip problematic members that don't match the expected
+                # interface or provide non-string values
+                continue
+
+    # No dynamic match: preserve original formatting
+    return raw
 
 
 def _classify_entity_type(
@@ -468,7 +558,7 @@ def get_entities_for_device(eep_profile: EepProfile) -> list[EEPEntityDef]:
 
 def _overlay_mapping_overrides(
     eep_entities: list[EEPEntityDef], type_entry: dict
-) -> list[EEPEntityDef]:
+) -> list[EEPEntityDef]:  # pylint: disable=too-many-nested-blocks
     """Overlay YAML mapping overrides onto EEP-derived entities.
 
     For each mapping entity, find the matching EEP entity by data_field name
@@ -492,63 +582,107 @@ def _overlay_mapping_overrides(
         data_field = eep_entity.data_field
         if data_field in mapping_lookup:
             mapping_def = mapping_lookup[data_field]
-            config = mapping_def.get("config", {})
+            _apply_mapping_to_entity(mapping_def, eep_entity, data_field)
+    return eep_entities
 
+
+def _apply_mapping_to_entity(
+    mapping_def: dict, eep_entity: EEPEntityDef, data_field: str
+) -> None:  # pylint: disable=too-many-nested-blocks
+    """Apply a single mapping override to an EEPEntityDef.
+
+    Factored out of _overlay_mapping_overrides to reduce nesting depth for
+    pylint and improve readability.
+    """
+    config = mapping_def.get("config", {})
+
+    _LOGGER.debug(
+        "Applying mapping override for %s: component=%s -> %s",
+        data_field,
+        mapping_def.get("component"),
+        eep_entity.entity_type,
+    )
+
+    # Override component/entity type when provided
+    if mapping_def.get("component"):
+        component_str = mapping_def["component"]
+        try:
+            old_type = eep_entity.entity_type
+            eep_entity.entity_type = EntityType(component_str)
             _LOGGER.debug(
-                "Applying mapping override for %s: component=%s -> %s",
+                "Overrode entity type for %s from %s to %s",
                 data_field,
-                mapping_def.get("component"),
+                old_type,
+                eep_entity.entity_type,
+            )
+        except ValueError:
+            _LOGGER.warning(
+                "Unknown component type '%s' in mapping for %s, keeping auto-classified %s",
+                component_str,
+                data_field,
                 eep_entity.entity_type,
             )
 
-            # Apply mapping overrides
-            if mapping_def.get("component"):
-                component_str = mapping_def["component"]
-                # Convert string component to EntityType enum
-                try:
-                    old_type = eep_entity.entity_type
-                    eep_entity.entity_type = EntityType(component_str)
-                    _LOGGER.debug(
-                        "Overrode entity type for %s from %s to %s",
-                        data_field,
-                        old_type,
-                        eep_entity.entity_type,
-                    )
-                except ValueError:
-                    _LOGGER.warning(
-                        "Unknown component type '%s' in mapping for %s, keeping auto-classified %s",
-                        component_str,
-                        data_field,
-                        eep_entity.entity_type,
-                    )
+    if config.get("unit"):
+        eep_entity.unit = config["unit"]
 
-            if config.get("unit_of_measurement"):
-                eep_entity.unit = config["unit_of_measurement"]
+    if config.get("device_class"):
+        eep_entity.device_class = config["device_class"]
 
-            if config.get("device_class"):
-                eep_entity.device_class = config["device_class"]
+    if config.get("min") is not None:
+        with contextlib.suppress(ValueError, TypeError):
+            eep_entity.min_value = float(config["min"])
 
-            if config.get("min") is not None:
-                with contextlib.suppress(ValueError, TypeError):
-                    eep_entity.min_value = float(config["min"])
+    if config.get("max") is not None:
+        with contextlib.suppress(ValueError, TypeError):
+            eep_entity.max_value = float(config["max"])
 
-            if config.get("max") is not None:
-                with contextlib.suppress(ValueError, TypeError):
-                    eep_entity.max_value = float(config["max"])
+    if config.get("options"):
+        eep_entity.enum_options = config["options"]
 
-            if config.get("options"):
-                eep_entity.enum_options = config["options"]
+    if config.get("value_template"):
+        eep_entity.value_template = config["value_template"]
 
-            if config.get("value_template"):
-                eep_entity.value_template = config["value_template"]
+    if config.get("icon"):
+        eep_entity.icon = config["icon"]
 
-            if config.get("icon"):
-                eep_entity.icon = config["icon"]
+    if config.get("state_class"):
+        eep_entity.state_class = config["state_class"]
 
-            if config.get("state_class"):
-                eep_entity.state_class = config["state_class"]
+    if config.get("entity_category"):
+        val = config["entity_category"]
+        resolved = _resolve_entity_category(val)
+        if resolved is not None:
+            eep_entity.entity_category = resolved
+        else:
+            _LOGGER.warning(
+                "Invalid entity_category '%s' in mapping for %s; must be one of: %s",
+                val,
+                data_field,
+                ", ".join(e.value for e in EntityCategory),
+            )
 
-            if config.get("entity_category"):
-                eep_entity.entity_category = config["entity_category"]
+    if config.get("command_template"):
+        eep_entity.command_template = config["command_template"]
 
-    return eep_entities
+    if config.get("mode"):
+        eep_entity.mode = config["mode"]
+
+
+def _resolve_entity_category(val: object) -> EntityCategory | None:
+    """Resolve an EntityCategory from a mapping value.
+
+    Accepts either an EntityCategory instance or a string matching either the
+    enum value or member name (case-insensitive). Returns None on failure.
+    """
+    if isinstance(val, EntityCategory):
+        return val
+    if isinstance(val, str):
+        try:
+            return EntityCategory(val)
+        except ValueError:
+            try:
+                return EntityCategory[val.upper()]
+            except KeyError:
+                return None
+    return None

@@ -15,7 +15,7 @@
 # Note: MQTT-specific fields (state_topic, command_topic, payload_*, command_template)
 #       are from the HA_enoceanmqtt project and shown for reference but are NOT used
 #       by the native EnOcean integration. Only 'value_template' and standard HA entity
-#       config (device_class, unit_of_measurement, icon, etc.) are processed.
+#       config (device_class, unit, icon, etc.) are processed.
 #
 0xD2:
   0x01:
@@ -95,7 +95,7 @@
             state_topic: "CMD7"
             state_class: "total_increasing"
             device_class: "energy"
-            unit_of_measurement: "Wh"
+            unit: "Wh"
             value_template: >-
               {% if value_parsed.UN == 0 %}
                 {{ (value_parsed.MV|int / 3600)|int }}
@@ -112,7 +112,7 @@
             state_topic: "CMD7"
             state_class: "measurement"
             device_class: "power"
-            unit_of_measurement: "W"
+            unit: "W"
             value_template: >-
               {% if value_parsed.UN == 3 %}
                 {{ value_parsed.MV }}
@@ -168,7 +168,7 @@
             max: "2550"
             step: "10"
             mode: "box"
-            unit_of_measurement: "s"
+            unit: "s"
             icon: "mdi:timer-refresh-outline"
         - component: "number"
           name: "meas_MIT"
@@ -178,7 +178,7 @@
             max: "255"
             step: "1"
             mode: "box"
-            unit_of_measurement: "s"
+            unit: "s"
             icon: "mdi:timer-refresh-outline"
         - component: "number"
           name: "meas_MD"
@@ -323,7 +323,7 @@
           name: "TMP"
           config:
             device_class: "temperature"
-            unit_of_measurement: "°C"
+            unit: "°C"
             state_class: "measurement"
             # Example: Round temperature to 1 decimal place
             value_template: "{{ value | round(1) }}"
@@ -331,7 +331,7 @@
           name: "HUM"
           config:
             device_class: "humidity"
-            unit_of_measurement: "%"
+            unit: "%"
             state_class: "measurement"
             value_template: "{{ value | round(1) }}"
         - component: binary_sensor
@@ -341,95 +341,60 @@
             device_class: "power"
 
 0xD1079:
-  0x00:
-    0x00:
-      entities:
-        - component: sensor
-          name: "Batt"
-          config:
-            device_class: "battery"
-            entity_category: "diagnostic"
-            value_template: "{{ (value / 7 * 100) | round }}"
   0x01:
     0x00:
-      device_config:
-        command: "CMD"
-        channel: "CMD"
-        log_learn: ""
-        direction: ""
-        answer: ""
       entities:
         - component: number
           name: "TEMPCELEC"
           config:
-            # value_template can access 'value' (raw field value) or 'value_parsed' (full parsed data)
-            # Example: Round temperature value to 1 decimal place
-            value_template: "{{ value | round(1) }}"
-            unit_of_measurement: "°C"
-            device_class: "temperature"
-            state_class: "measurement"
+            mode: "slider"
+            command_template: >-
+              {"MSC":"1","CMD":"0","TEMPEL":{{value}}, "send":"clear"}
         - component: number
           name: "TEMPMSOUFFL"
           config:
-            value_template: "{{ value | round(1) }}"
-            unit_of_measurement: "°C"
-            device_class: "temperature"
-            state_class: "measurement"
+            mode: "slider"
+            command_template: >-
+              {"MSC":"1","CMD":"0","TEMPSOUF":{{value}}, "send":"clear"}
         - component: number
           name: "TEMPCHYDROR"
           config:
-            value_template: "{{ value | round(1) }}"
-            unit_of_measurement: "°C"
-            device_class: "temperature"
-            state_class: "measurement"
+            mode: "slider"
+            command_template: >-
+              {"MSC":"1","CMD":"0","TEMPHYD":{{value}}, "send":"clear"}
         - component: number
           name: "TEMPSOL"
           config:
-            value_template: "{{ value | round(1) }}"
-            unit_of_measurement: "°C"
-            device_class: "temperature"
-            state_class: "measurement"
+            mode: "slider"
+            command_template: >-
+              {"MSC":"1","CMD":"0","TEMPSOL":"{{value}}", "send":"clear"}
         - component: switch
           name: "SURV"
-          config:
-            # value_template: Transform raw value if needed
-            # Example: "{{ 'ON' if value == 1 else 'OFF' }}"
-            command_topic: "req"
-            payload_on: "1"
-            payload_off: "0"
+          entity_category: "configuration"
         - component: switch
           name: "DEBF"
-          config:
-            # value_template can transform boolean values
-            command_topic: "req"
-            payload_on: "1"
-            payload_off: "0"
+          entity_category: "configuration"
         - component: number
           name: "BOOS"
           config:
-            # value_template: Access the raw field value directly
-            # Example: "{{ value | int }}"
-            unit_of_measurement: "min"
+            unit: "min"
             min: "0"
             max: "200"
             step: "1"
             mode: "box"
-            command_topic: "req"
             command_template: >-
-              {"CMD":"0","BOOST":{{value}}, "send":"clear"}
+              {"MSC":"1","command":"0","BOOST":{{value}}, "send":"clear"}
         - component: number
           name: "VAC"
           config:
-            unit_of_measurement: "d"
+            unit: "d"
             min: "0"
             max: "365"
             step: "1"
-        - component: sensor
-          name: "TYCAIS"
+            mode: "box"
         - component: sensor
           name: "CERR2"
           config:
-            # For complex transformations, access full packet:
             value_template: "{{ value_parsed.get('CERR2', 'unknown') }}"
         - component: sensor
           name: "ETATS"
@@ -441,3 +406,46 @@
           name: "LOC"
         - component: sensor
           name: "PROFAPP"
+        - component: sensor
+          name: "CVTIM"
+          entity_category: "diagnostic"
+        - component: sensor
+          name: "POS0"
+          entity_category: "configuration"
+        - component: sensor
+          name: "POS1"
+          entity_category: "configuration"
+        - component: sensor
+          name: "POS2"
+          entity_category: "configuration"
+        - component: sensor
+          name: "POS3"
+          entity_category: "configuration"
+        - component: sensor
+          name: "POS4"
+          entity_category: "configuration"
+        - component: sensor
+          name: "POSBY1"
+          entity_category: "configuration"
+        - component: sensor
+          name: "POSBY2"
+          entity_category: "configuration"
+        - component: sensor
+          name: "POSBY3"
+          entity_category: "configuration"
+        - component: sensor
+          name: "TYPCAI"
+          entity_category: "diagnostic"
+        - name: "VVENT"
+          entity_category: "configuration"
+        - name: "JINST"
+          entity_category: "diagnostic"
+        - name: "MINST"
+          entity_category: "diagnostic"
+        - name: "AINST"
+          entity_category: "diagnostic"
+        - component: sensor
+          name: "MF"
+          config:
+            command_template: >-
+              {"MSC":"1","CMD":"0","MODEFONC":"{{value}}", "send":"clear"}

@@ -241,6 +241,17 @@ class EnOceanDongle:
             # This ensures packet.parsed is populated before dispatching to entities
             self._parse_packet_by_profile(packet)
 
+            if hasattr(packet, "dBm") and packet.dBm is not None:
+                device_id = packet.sender
+                # Dispatch RSSI update to registered RSSI sensor entities
+                self.hass.loop.call_soon_threadsafe(
+                    lambda: dispatcher_send(
+                        self.hass,
+                        f"{SIGNAL_RECEIVE_MESSAGE}_rssi_{format_device_id_hex(device_id)}",
+                        packet.dBm,
+                    )
+                )
+
             # Schedule message dispatch in event loop thread-safely
             self.hass.loop.call_soon_threadsafe(
                 lambda: dispatcher_send(self.hass, SIGNAL_RECEIVE_MESSAGE, packet)
@@ -442,8 +453,13 @@ class EnOceanDongle:
         if not profile:
             # No known profile for this device yet
             return
+        if packet.getattr(packet, "rorg_of_eep", None) != profile["rorg"]:
+            # Packet's RORG doesn't match profile's RORG - can't parse, ex: UTE teach-in response
+            return
 
         # Extract command if present (for MSC and VLD packets)
+        # For MSC packets, packet.cmd is already set by the enocean library
+        # during packet.parse() - it extracts CMD from bits 12-15 for Ventilairsec
         command = getattr(packet, "cmd", None)
 
         try:
@@ -536,15 +552,38 @@ class EnOceanDongle:
         # Extract sensor information from parsed packet
         try:
             # IDAPP: Unique sensor ID (32-bit)
-            sensor_id = packet.parsed.get("IDAPP", {})
-            if not sensor_id:
+            sensor_id_raw = packet.parsed.get("IDAPP", {})
+            if not sensor_id_raw:
+                return
+
+            # Extract value from dict structure if present
+            if isinstance(sensor_id_raw, dict):
+                sensor_id = sensor_id_raw.get("value", sensor_id_raw.get("raw_value"))
+            else:
+                sensor_id = sensor_id_raw
+
+            # Convert to int if it's a float (parser may return float)
+            if isinstance(sensor_id, (float, int)):
+                sensor_id = int(sensor_id)
+            else:
+                _LOGGER.warning("Invalid sensor_id type: %s", type(sensor_id))
                 return
 
             # PROFAPP: Sensor profile (enum: 1=MSC, 2=A5_04_01, 3=A5_09_04, 4=D2_04_08)
-            prof_app_value = packet.parsed.get("PROFAPP", {})
+            prof_app_raw = packet.parsed.get("PROFAPP", {})
+            prof_app_value = (
+                prof_app_raw.get("raw_value", prof_app_raw.get("value"))
+                if isinstance(prof_app_raw, dict)
+                else prof_app_raw
+            )
 
             # CAPTINDEX: Sensor index (for multiple sensors)
-            capt_index = packet.parsed.get("CAPTINDEX", {})
+            capt_index_raw = packet.parsed.get("CAPTINDEX", {})
+            capt_index = (
+                capt_index_raw.get("value", capt_index_raw.get("raw_value"))
+                if isinstance(capt_index_raw, dict)
+                else capt_index_raw
+            )
 
             _LOGGER.debug(
                 "MSC CMD=8 extracted - sensor_id=%s, prof_app_value=%s, capt_index=%s",

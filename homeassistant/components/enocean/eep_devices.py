@@ -222,7 +222,7 @@ def _extract_eep_fields(
                     unit=_normalize_unit(unit),
                     device_class=None,
                     entity_type=_classify_entity_type(
-                        shortcut, description, field_type, items
+                        shortcut, description, field_type, items, min_value, max_value
                     ),
                     min_value=min_value,
                     max_value=max_value,
@@ -464,10 +464,13 @@ def _classify_entity_type(
     description: str | None,
     field_type: str,
     items: list[dict] | None,
+    min_value: float | None = None,
+    max_value: float | None = None,
 ) -> EntityType:
     """Classify field to Home Assistant entity type.
 
-    Returns one of: EntityType.SENSOR, EntityType.BINARY_SENSOR, EntityType.SELECT, EntityType.LIGHT, EntityType.BUTTON.
+    Returns one of: EntityType.SENSOR, EntityType.BINARY_SENSOR, EntityType.SELECT,
+    EntityType.LIGHT, EntityType.BUTTON, EntityType.NUMBER.
     """
 
     sc = (shortcut or "").upper()
@@ -477,8 +480,9 @@ def _classify_entity_type(
     if field_type == "boolean":
         return EntityType.BINARY_SENSOR
 
-    # Enums: detect binary, rocker, or multi-select
-    if field_type == "enum" and items:
+    # Enums with items -> select or binary_sensor (highest priority)
+    # This includes fields with <item> or <rangeitem> elements
+    if items and len(items) > 0:
         vals = {int(it["value"]) if isinstance(it["value"], int) else 0 for it in items}
         if vals == {0, 1}:
             return EntityType.BINARY_SENSOR
@@ -504,6 +508,32 @@ def _classify_entity_type(
     # Commands -> button
     if sc == "CMD" or "command" in desc:
         return EntityType.BUTTON
+
+    # Value fields with finite range -> number (configurable parameters)
+    # Typical pattern: fields like volume, speed, setpoints with defined min/max
+    if field_type == "value" and min_value is not None and max_value is not None:
+        # Heuristics: if the range is reasonable for configuration (not just sensor readings)
+        # Check if range suggests a settable parameter rather than a measurement
+        range_size = max_value - min_value
+        # Avoid very large ranges that are likely just sensor scales
+        if 0 < range_size <= 10000:
+            # Additional check: certain keywords suggest configurable values
+            config_keywords = [
+                "volume",
+                "speed",
+                "setpoint",
+                "target",
+                "position",
+                "bypass",
+                "ventil",
+                "vitesse",
+                "débit",
+                "consigne",
+            ]
+            if any(kw in desc for kw in config_keywords) or any(
+                kw in sc for kw in ["VIT", "VOL", "POS", "BY", "VVENT"]
+            ):
+                return EntityType.NUMBER
 
     # Default: sensor
     return EntityType.SENSOR

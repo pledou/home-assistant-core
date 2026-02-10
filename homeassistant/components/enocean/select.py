@@ -213,58 +213,56 @@ class DynamicEnOceanSelect(DynamicEnoceanEntity, EnOceanSelect):
         """Update current option based on incoming packet using parser when available."""
         # Prefer packet.parsed if present
         parsed = getattr(packet, "parsed", None)
-        if parsed and self._data_field:
-            try:
-                entry = parsed.get(self._data_field)
-                if isinstance(entry, dict):
-                    raw = (
-                        entry.get("raw_value") or entry.get("value") or entry.get("raw")
-                    )
-                else:
-                    raw = entry
-
-                if raw is not None:
-                    raw_str = str(raw)
-                    for opt in self._attr_options:
-                        if opt == raw_str or opt.lower() == raw_str.lower():
-                            self._current_option = opt
-                            self.schedule_update_ha_state()
-                            return
-            except (AttributeError, KeyError, TypeError, ValueError) as err:
-                LOGGER.debug(
-                    "Failed to map packet to select option for %s: error: %s",
-                    self._attr_unique_id,
-                    err,
-                )
-
-        # Fallback: use parser to parse raw packet if available
-        if not packet.data or len(packet.data) < 2:
+        if not parsed or not self._data_field:
             return
 
-        # Packet should already be parsed by dongle callback
-        if not packet.parsed or not self._data_field:
-            return
-
-        # Prefer using the original EEP fields mapping (dict) for enum
-        # resolution. If we only have an EEPEntityDef dataclass, it may
-        # carry the raw mapping on the `raw_fields` attribute.
+        # Try to get the enum-resolved value first (for proper description mapping)
+        # Prefer using the original EEP fields mapping (dict) for enum resolution
         fields_mapping = None
         if isinstance(self._fields, dict):
             fields_mapping = self._fields
         else:
             fields_mapping = getattr(self._fields, "raw_fields", None)
 
+        # Use get_field_value_with_enum to properly map raw values to descriptions
         if fields_mapping and get_field_value_with_enum is not None:
-            value = get_field_value_with_enum(
-                packet.parsed, self._data_field, fields_mapping
-            )
-        else:
-            value = self._get_parsed_value(packet, self._data_field)
+            try:
+                value = get_field_value_with_enum(
+                    parsed, self._data_field, fields_mapping
+                )
+                if value is not None:
+                    value_str = str(value)
+                    for opt in self._attr_options:
+                        if opt == value_str or opt.lower() == value_str.lower():
+                            self._current_option = opt
+                            self.schedule_update_ha_state()
+                            return
+            except (AttributeError, KeyError, TypeError, ValueError) as err:
+                LOGGER.debug(
+                    "Failed to get enum value for %s: %s",
+                    self._attr_unique_id,
+                    err,
+                )
 
-        if value is not None:
-            raw_str = str(value)
-            for opt in self._attr_options:
-                if opt == raw_str or opt.lower() == raw_str.lower():
-                    self._current_option = opt
-                    self.schedule_update_ha_state()
-                    return
+        # Fallback: try direct value extraction without enum mapping
+        # For enum fields, prefer 'value' (enum description) over 'raw_value' (numeric)
+        try:
+            entry = parsed.get(self._data_field)
+            if isinstance(entry, dict):
+                raw = entry.get("value") or entry.get("raw_value") or entry.get("raw")
+            else:
+                raw = entry
+
+            if raw is not None:
+                raw_str = str(raw)
+                for opt in self._attr_options:
+                    if opt == raw_str or opt.lower() == raw_str.lower():
+                        self._current_option = opt
+                        self.schedule_update_ha_state()
+                        return
+        except (AttributeError, KeyError, TypeError, ValueError) as err:
+            LOGGER.debug(
+                "Failed to map packet to select option for %s: error: %s",
+                self._attr_unique_id,
+                err,
+            )

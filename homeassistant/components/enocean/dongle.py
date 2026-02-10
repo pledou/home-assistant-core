@@ -782,32 +782,6 @@ class EnOceanDongle:
             )
 
             if packet.parsed:
-                # Safely stringify packet.data whether it's bytes or a list of ints
-                if packet.data:
-                    if isinstance(packet.data, (bytes, bytearray)):
-                        data_hex = packet.data.hex()
-                    elif isinstance(packet.data, list):
-                        try:
-                            data_hex = bytes(packet.data).hex()
-                        except (TypeError, ValueError):
-                            data_hex = str(packet.data)
-                    else:
-                        data_hex = str(packet.data)
-                else:
-                    data_hex = "None"
-
-                _LOGGER.info(
-                    "Parsed packet from %s using registered profile: %s, data: %s, parsed values: %s",
-                    format_device_id_hex(packet.sender),
-                    list(packet.parsed.keys()) if packet.parsed else "empty",
-                    data_hex,
-                    {
-                        k: v
-                        for k, v in packet.parsed.items()
-                        if isinstance(v, (int, str, bool))
-                    },
-                )
-
                 # If device has a profile but no entities yet, trigger rediscovery
                 # This happens after restart when persisted profiles are loaded
                 if device_key not in self._devices_with_entities:

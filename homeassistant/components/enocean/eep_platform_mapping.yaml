@@ -352,6 +352,8 @@
         - component: number
           name: "TEMPMSOUFFL"
           config:
+            mode: "box"
+            unit: "°C"
             command_template: >-
               {"MSC":"1","CMD":"0","TEMPSOUF":{{value}}, "send":"clear"}
         - component: select
@@ -367,11 +369,11 @@
         - component: switch
           name: "SURV"
           config:
-            entity_category: "configuration"
+            entity_category: "config"
         - component: switch
           name: "DEBF"
           config:
-            entity_category: "configuration"
+            entity_category: "config"
         - component: number
           name: "BOOS"
           config:
@@ -406,46 +408,43 @@
           name: "CVTIM"
           config:
             entity_category: "diagnostic"
-        - component: sensor
-          name: "POS0"
+        - name: "POS0"
           config:
-            entity_category: "configuration"
-        - component: sensor
-          name: "POS1"
+            entity_category: "config"
+        - name: "POS1"
           config:
-            entity_category: "configuration"
-        - component: sensor
-          name: "POS2"
+            entity_category: "config"
+        - name: "POS2"
           config:
-            entity_category: "configuration"
-        - component: sensor
-          name: "POS3"
+            entity_category: "config"
+        - name: "POS3"
           config:
-            entity_category: "configuration"
-        - component: sensor
-          name: "POS4"
+            entity_category: "config"
+        - name: "POS4"
           config:
-            entity_category: "configuration"
-        - component: sensor
-          name: "POSBY1"
+            entity_category: "config"
+        - name: "POSBY1"
           config:
-            entity_category: "configuration"
-        - component: sensor
-          name: "POSBY2"
+            entity_category: "config"
+        - name: "POSBY2"
           config:
-            entity_category: "configuration"
-        - component: sensor
-          name: "POSBY3"
+            entity_category: "config"
+        - name: "POSBY3"
           config:
-            entity_category: "configuration"
+            entity_category: "config"
+        - component: sensor
+          name: "OUVBY1"
+        - component: sensor
+          name: "OUVBY2"
+        - component: sensor
+          name: "OUVBY3"
         - component: sensor
           name: "TYPCAI"
           config:
             entity_category: "diagnostic"
-        - component: sensor
-          name: "VVENT"
+        - name: "VVENT"
           config:
-            entity_category: "configuration"
+            entity_category: "config"
         - component: sensor
           name: "JINST"
           config:
@@ -467,3 +466,5 @@
           name: "CVITM"
         - component: sensor
           name: "PIECEAPP"
+        - component: sensor
+          name: "CPDIFF"

@@ -723,7 +723,7 @@ class EnOceanDongle:
 
             # Check if destination is this dongle
             is_to_dongle = (
-                dest == list(self.dev_id) if len(dest) == len(self.dev_id) else False
+                dest == list(self.base_id) if len(dest) == len(self.base_id) else False
             )
 
             # Check if sender is controller (d1079-01-00 profile)
@@ -748,7 +748,7 @@ class EnOceanDongle:
                     if hasattr(packet, "sender")
                     else "unknown",
                     format_device_id_hex(dest),
-                    format_device_id_hex(list(self.dev_id)),
+                    format_device_id_hex(list(self.base_id)),
                 )
                 return
 

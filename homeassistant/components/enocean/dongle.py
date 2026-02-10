@@ -707,6 +707,51 @@ class EnOceanDongle:
         Args:
             packet: EnOcean RadioPacket to parse
         """
+        # Skip command packets sent FROM controller (d1079-01-00) TO other devices
+        # This avoids parsing controller→sensor commands that cause validation errors
+        if hasattr(packet, "destination") and packet.destination:
+            dest = (
+                packet.destination
+                if isinstance(packet.destination, list)
+                else [packet.destination]
+            )
+
+            # Check if destination is broadcast
+            is_broadcast = all(b == 0xFF for b in dest) or (
+                len(dest) == 4 and dest[0] == 0xFF
+            )
+
+            # Check if destination is this dongle
+            is_to_dongle = (
+                dest == list(self.dev_id) if len(dest) == len(self.dev_id) else False
+            )
+
+            # Check if sender is controller (d1079-01-00 profile)
+            sender_key = (
+                tuple(packet.sender)
+                if isinstance(packet.sender, list)
+                else (packet.sender,)
+            )
+            sender_profile = self._device_profiles.get(sender_key)
+            is_from_controller = (
+                sender_profile
+                and sender_profile.get("rorg") == 0xD1079
+                and sender_profile.get("func") == 0x01
+            )
+
+            # Only skip if it's FROM controller AND directed to another device
+            if is_from_controller and not is_broadcast and not is_to_dongle:
+                # This is a command packet from controller to sensor - skip parsing
+                _LOGGER.debug(
+                    "Skipping parse of controller command from %s to %s (not to dongle %s)",
+                    format_device_id_hex(packet.sender)
+                    if hasattr(packet, "sender")
+                    else "unknown",
+                    format_device_id_hex(dest),
+                    format_device_id_hex(list(self.dev_id)),
+                )
+                return
+
         # Get device key
         device_key = (
             tuple(packet.sender)

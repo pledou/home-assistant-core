@@ -59,6 +59,7 @@ async def test_parse_accepts_combined_numeric_rorg(
     # Create a fake packet with rorg_of_eep == RORG.MSC (0xD1)
     packet = Mock()
     packet.sender = sender
+    packet.destination = [0xFF, 0x9C, 0x80, 0x80]  # Broadcast address
     packet.data = [0x00]
     packet.cmd = None
     packet.rorg = RORG.MSC

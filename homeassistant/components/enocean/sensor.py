@@ -195,6 +195,7 @@ class EnOceanSensor(EnOceanEntity, RestoreSensor):
             data_field=description.key,
             attr_name=attr_name_value,
             dev_name=dev_name,
+            fields=fields,
         )
 
         # Apply EEPEntityDef-derived properties when provided

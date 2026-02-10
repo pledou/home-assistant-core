@@ -1,10 +1,10 @@
 """Test out-of-range value validation for EnOcean entities."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from homeassistant.components.enocean.entity import EnOceanEntity
+from homeassistant.components.enocean.dongle import EnOceanDongle
 from homeassistant.core import HomeAssistant
 
 
@@ -62,27 +62,17 @@ async def test_valid_packet_accepted(
     hass: HomeAssistant, mock_packet_valid, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Test that valid packets are accepted and processed."""
-    entity = EnOceanEntity(
-        dev_id=[0x04, 0x20, 0x58, 0xA5],
-        data_field="test_field",
-        attr_name="Test Entity",
-    )
-    entity.hass = hass
+    with (
+        patch(
+            "homeassistant.components.enocean.dongle.SerialCommunicator"
+        ) as mock_comm,
+    ):
+        mock_comm.return_value = MagicMock()
+        mock_comm.return_value.teach_in = False
+        dongle = EnOceanDongle(hass, "/dev/ttyUSB0")
 
-    # Mock value_changed to track if it was called
-    value_changed_called = False
-
-    def mock_value_changed(packet):
-        nonlocal value_changed_called
-        value_changed_called = True
-
-    entity.value_changed = mock_value_changed
-
-    # Process the packet
-    entity._message_received_callback(mock_packet_valid)
-
-    # Should process the packet
-    assert value_changed_called
+    # Should validate the packet
+    assert dongle._validate_and_track_packet(mock_packet_valid) is True
     assert "out-of-range" not in caplog.text.lower()
 
 
@@ -90,27 +80,17 @@ async def test_invalid_packet_rejected(
     hass: HomeAssistant, mock_packet_invalid, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Test that packets with out-of-range values are rejected and logged."""
-    entity = EnOceanEntity(
-        dev_id=[0x04, 0x20, 0x58, 0xA5],
-        data_field="test_field",
-        attr_name="Test Entity",
-    )
-    entity.hass = hass
+    with (
+        patch(
+            "homeassistant.components.enocean.dongle.SerialCommunicator"
+        ) as mock_comm,
+    ):
+        mock_comm.return_value = MagicMock()
+        mock_comm.return_value.teach_in = False
+        dongle = EnOceanDongle(hass, "/dev/ttyUSB0")
 
-    # Mock value_changed to track if it was called
-    value_changed_called = False
-
-    def mock_value_changed(packet):
-        nonlocal value_changed_called
-        value_changed_called = True
-
-    entity.value_changed = mock_value_changed
-
-    # Process the packet
-    entity._message_received_callback(mock_packet_invalid)
-
-    # Should NOT process the packet
-    assert not value_changed_called
+    # Should NOT validate the packet
+    assert dongle._validate_and_track_packet(mock_packet_invalid) is False
 
     # Should log a warning
     assert "out-of-range" in caplog.text.lower()
@@ -119,25 +99,31 @@ async def test_invalid_packet_rejected(
 
 async def test_out_of_range_detection(hass: HomeAssistant, mock_packet_invalid) -> None:
     """Test that _has_out_of_range_fields correctly detects invalid fields."""
-    entity = EnOceanEntity(
-        dev_id=[0x04, 0x20, 0x58, 0xA5],
-        data_field="test_field",
-    )
-    entity.hass = hass
+    with (
+        patch(
+            "homeassistant.components.enocean.dongle.SerialCommunicator"
+        ) as mock_comm,
+    ):
+        mock_comm.return_value = MagicMock()
+        mock_comm.return_value.teach_in = False
+        dongle = EnOceanDongle(hass, "/dev/ttyUSB0")
 
     # Should detect out-of-range fields
-    assert entity._has_out_of_range_fields(mock_packet_invalid) is True
+    assert dongle._has_out_of_range_fields(mock_packet_invalid) is True
 
 
 async def test_no_out_of_range_detection(
     hass: HomeAssistant, mock_packet_valid
 ) -> None:
     """Test that _has_out_of_range_fields returns False for valid packets."""
-    entity = EnOceanEntity(
-        dev_id=[0x04, 0x20, 0x58, 0xA5],
-        data_field="test_field",
-    )
-    entity.hass = hass
+    with (
+        patch(
+            "homeassistant.components.enocean.dongle.SerialCommunicator"
+        ) as mock_comm,
+    ):
+        mock_comm.return_value = MagicMock()
+        mock_comm.return_value.teach_in = False
+        dongle = EnOceanDongle(hass, "/dev/ttyUSB0")
 
     # Should NOT detect out-of-range fields
-    assert entity._has_out_of_range_fields(mock_packet_valid) is False
+    assert dongle._has_out_of_range_fields(mock_packet_valid) is False

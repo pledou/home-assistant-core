@@ -366,10 +366,12 @@
               {"MSC":"1","CMD":"0","TEMPSOL":"{{value}}", "send":"clear"}
         - component: switch
           name: "SURV"
-          entity_category: "configuration"
+          config:
+            entity_category: "configuration"
         - component: switch
           name: "DEBF"
-          entity_category: "configuration"
+          config:
+            entity_category: "configuration"
         - component: number
           name: "BOOS"
           config:
@@ -402,42 +404,60 @@
           name: "PROFAPP"
         - component: sensor
           name: "CVTIM"
-          entity_category: "diagnostic"
+          config:
+            entity_category: "diagnostic"
         - component: sensor
           name: "POS0"
-          entity_category: "configuration"
+          config:
+            entity_category: "configuration"
         - component: sensor
           name: "POS1"
-          entity_category: "configuration"
+          config:
+            entity_category: "configuration"
         - component: sensor
           name: "POS2"
-          entity_category: "configuration"
+          config:
+            entity_category: "configuration"
         - component: sensor
           name: "POS3"
-          entity_category: "configuration"
+          config:
+            entity_category: "configuration"
         - component: sensor
           name: "POS4"
-          entity_category: "configuration"
+          config:
+            entity_category: "configuration"
         - component: sensor
           name: "POSBY1"
-          entity_category: "configuration"
+          config:
+            entity_category: "configuration"
         - component: sensor
           name: "POSBY2"
-          entity_category: "configuration"
+          config:
+            entity_category: "configuration"
         - component: sensor
           name: "POSBY3"
-          entity_category: "configuration"
+          config:
+            entity_category: "configuration"
         - component: sensor
           name: "TYPCAI"
-          entity_category: "diagnostic"
-        - name: "VVENT"
-          entity_category: "configuration"
-        - name: "JINST"
-          entity_category: "diagnostic"
-        - name: "MINST"
-          entity_category: "diagnostic"
-        - name: "AINST"
-          entity_category: "diagnostic"
+          config:
+            entity_category: "diagnostic"
+        - component: sensor
+          name: "VVENT"
+          config:
+            entity_category: "configuration"
+        - component: sensor
+          name: "JINST"
+          config:
+            entity_category: "diagnostic"
+        - component: sensor
+          name: "MINST"
+          config:
+            entity_category: "diagnostic"
+        - component: sensor
+          name: "AINST"
+          config:
+            entity_category: "diagnostic"
         - component: select
           name: "MF"
           config:

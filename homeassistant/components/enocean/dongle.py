@@ -7,8 +7,8 @@ import logging
 from os.path import basename, normpath
 
 from enocean.communicators import SerialCommunicator
-from enocean.protocol.constants import RORG
-from enocean.protocol.packet import RadioPacket
+from enocean.protocol.constants import PACKET, RORG
+from enocean.protocol.packet import Packet, RadioPacket
 import serial
 
 from homeassistant.config_entries import ConfigEntry
@@ -63,6 +63,11 @@ class EnOceanDongle:
         self._learning_task: asyncio.Task[None] | None = None
         self._learning_duration = 10  # Default 10 minutes
         self.base_id: list[int] | None = None
+        # Track consecutive invalid packets per device for dongle reset logic
+        self._device_invalid_packet_count: dict[str, int] = {}
+        self._dongle_reset_threshold = 5  # Reset after 10 consecutive invalid packets
+        # Track device-level warning flags to avoid duplicate warnings
+        self._device_warnings: dict[str, dict[str, bool]] = {}
 
     def has_entity_for_device(self, device_id) -> bool:
         """Check if the given device_id already has entities created."""
@@ -198,6 +203,260 @@ class EnOceanDongle:
         """Disable learning mode after timeout."""
         try:
             await asyncio.sleep(duration)
+        except asyncio.CancelledError:
+            return
+        self._communicator.teach_in = False
+        _LOGGER.info("EnOcean learning mode disabled (timeout)")
+
+        # Send dispatcher signal that learning mode stopped
+        dispatcher_send(
+            self.hass,
+            SIGNAL_LEARNING_MODE_CHANGED,
+            {"enabled": False},
+        )
+
+    def _get_device_warnings(self, device_id: list[int]) -> dict[str, bool]:
+        """Get device-level warning flags.
+
+        Returns dict with keys: out_of_range_logged, invalid_enum_logged
+        This ensures warnings are logged once per device, not once per entity.
+
+        Args:
+            device_id: Device ID as list of integers
+
+        Returns:
+            Dictionary with warning flag states
+        """
+        device_id_str = format_device_id_hex(device_id)
+
+        if device_id_str not in self._device_warnings:
+            self._device_warnings[device_id_str] = {
+                "out_of_range_logged": False,
+                "invalid_enum_logged": False,
+            }
+
+        return self._device_warnings[device_id_str]
+
+    def _has_out_of_range_fields(self, packet) -> bool:
+        """Check if packet has any fields with out-of-range values.
+
+        Args:
+            packet: EnOcean packet with parsed data
+
+        Returns:
+            True if any field is out of range, False otherwise
+        """
+        if not hasattr(packet, "parsed") or not packet.parsed:
+            return False
+
+        for field_data in packet.parsed.values():
+            if isinstance(field_data, dict) and field_data.get("out_of_range", False):
+                return True
+        return False
+
+    def _has_invalid_enum_fields(self, packet) -> bool:
+        """Check if packet has any enum fields with invalid values.
+
+        Args:
+            packet: EnOcean packet with parsed data
+
+        Returns:
+            True if any enum field has invalid value, False otherwise
+        """
+        if not hasattr(packet, "parsed") or not packet.parsed:
+            return False
+
+        for field_data in packet.parsed.values():
+            if isinstance(field_data, dict) and field_data.get("invalid_enum", False):
+                return True
+        return False
+
+    def _log_invalid_packet_warning(self, packet):
+        """Log warning for packets with out-of-range values.
+
+        Args:
+            packet: EnOcean packet with invalid data
+        """
+        try:
+            sender = format_device_id_hex(
+                packet.sender if hasattr(packet, "sender") else [0, 0, 0, 0]
+            )
+            dbm = packet.dBm if hasattr(packet, "dBm") else 0
+
+            # Collect out-of-range fields info
+            out_of_range_fields = []
+            all_parsed_values = {}
+            if packet.parsed:
+                for field_name, field_data in packet.parsed.items():
+                    if isinstance(field_data, dict):
+                        value = field_data.get("value", field_data.get("raw_value"))
+                        all_parsed_values[field_name] = value
+                        if field_data.get("out_of_range", False):
+                            raw_value = field_data.get("raw_value")
+                            unit = field_data.get("unit", "")
+                            out_of_range_fields.append(
+                                f"{field_name}={value} (raw={raw_value}){f' {unit}' if unit else ''}"
+                            )
+                    else:
+                        all_parsed_values[field_name] = field_data
+
+            _LOGGER.warning(
+                "Ignoring packet from %s with out-of-range fields: [%s]. All values: %s (Signal: %d dBm)",
+                sender,
+                ", ".join(out_of_range_fields),
+                all_parsed_values,
+                dbm,
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Error formatting invalid packet warning: %s", err)
+
+    def _log_invalid_enum_warning(self, packet):
+        """Log warning for packets with invalid enum values.
+
+        Args:
+            packet: EnOcean packet with invalid enum data
+        """
+        try:
+            sender = format_device_id_hex(
+                packet.sender if hasattr(packet, "sender") else [0, 0, 0, 0]
+            )
+            dbm = packet.dBm if hasattr(packet, "dBm") else 0
+
+            # Collect invalid enum fields info
+            invalid_enum_fields = []
+            all_parsed_values = {}
+            if packet.parsed:
+                for field_name, field_data in packet.parsed.items():
+                    if isinstance(field_data, dict):
+                        value = field_data.get("value", field_data.get("raw_value"))
+                        all_parsed_values[field_name] = value
+                        if field_data.get("invalid_enum", False):
+                            raw_value = field_data.get("raw_value")
+                            unit = field_data.get("unit", "")
+                            invalid_enum_fields.append(
+                                f"{field_name}={value} (raw={raw_value}){f' {unit}' if unit else ''}"
+                            )
+                    else:
+                        all_parsed_values[field_name] = field_data
+
+            _LOGGER.warning(
+                "Ignoring packet from %s with invalid enum values: [%s]. All values: %s (Signal: %d dBm)",
+                sender,
+                ", ".join(invalid_enum_fields),
+                all_parsed_values,
+                dbm,
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Error formatting invalid enum warning: %s", err)
+
+    def _validate_and_track_packet(self, packet) -> bool:
+        """Validate packet and track invalid counts.
+
+        Args:
+            packet: EnOcean packet to validate
+
+        Returns:
+            True if packet is valid and should be dispatched, False otherwise
+        """
+        if not hasattr(packet, "sender"):
+            return True  # Can't validate without sender ID
+
+        device_id = packet.sender
+        device_id_str = format_device_id_hex(device_id)
+        device_warnings = self._get_device_warnings(device_id)
+
+        # Check if any parsed fields are out of range
+        if self._has_out_of_range_fields(packet):
+            # Only log detailed warning once per device to avoid spam
+            if not device_warnings["out_of_range_logged"]:
+                self._log_invalid_packet_warning(packet)
+                device_warnings["out_of_range_logged"] = True
+
+            # Increment invalid packet count
+            self._device_invalid_packet_count[device_id_str] = (
+                self._device_invalid_packet_count.get(device_id_str, 0) + 1
+            )
+
+            # Check if threshold exceeded and trigger reset
+            if (
+                self._device_invalid_packet_count[device_id_str]
+                >= self._dongle_reset_threshold
+            ):
+                self._trigger_dongle_reset(device_id_str)
+
+            return False
+
+        # Check if any enum fields have invalid values
+        if self._has_invalid_enum_fields(packet):
+            # Only log detailed warning once per device to avoid spam
+            if not device_warnings["invalid_enum_logged"]:
+                self._log_invalid_enum_warning(packet)
+                device_warnings["invalid_enum_logged"] = True
+
+            # Increment invalid packet count
+            self._device_invalid_packet_count[device_id_str] = (
+                self._device_invalid_packet_count.get(device_id_str, 0) + 1
+            )
+
+            # Check if threshold exceeded and trigger reset
+            if (
+                self._device_invalid_packet_count[device_id_str]
+                >= self._dongle_reset_threshold
+            ):
+                self._trigger_dongle_reset(device_id_str)
+
+            return False
+
+        # Reset warning flags and counter if we receive valid data
+        # device_warnings["out_of_range_logged"] = False
+        # device_warnings["invalid_enum_logged"] = False
+        # self._device_invalid_packet_count.pop(device_id_str, None)
+
+        return True
+
+    def reset_invalid_packet_count(self, device_id: list[int]) -> None:
+        """Reset consecutive invalid packet count for a device when valid data received.
+
+        Args:
+            device_id: Device ID as list of integers
+        """
+        device_id_str = format_device_id_hex(device_id)
+        self._device_invalid_packet_count.pop(device_id_str, None)
+
+    def _trigger_dongle_reset(self, device_id_str: str) -> None:
+        """Trigger dongle reset via CO_WR_RESET command.
+
+        Args:
+            device_id_str: Device ID as hex string for logging
+        """
+        count = self._device_invalid_packet_count.get(device_id_str, 0)
+        _LOGGER.warning(
+            "Device %s has received %d consecutive invalid packets. Attempting dongle reset (CO_WR_RESET)",
+            device_id_str,
+            count,
+        )
+
+        try:
+            # Create CO_WR_RESET common command packet
+            # CO_WR_RESET = 0x02 (Common Command 2)
+            reset_packet = Packet(PACKET.COMMON_COMMAND, data=[0x02])
+
+            _LOGGER.info("Sending CO_WR_RESET command to EnOcean dongle")
+
+            # Use call_soon_threadsafe since we're in the communicator thread
+            self.hass.loop.call_soon_threadsafe(
+                dispatcher_send, self.hass, SIGNAL_SEND_MESSAGE, reset_packet
+            )
+
+            # Clear all device counters and warnings after reset
+            self._device_invalid_packet_count.clear()
+            self._device_warnings.clear()
+
+            _LOGGER.info("Dongle reset command sent successfully")
+        except Exception:
+            _LOGGER.exception(
+                "Failed to send dongle reset command",
+            )
             self._communicator.teach_in = False
             _LOGGER.info("EnOcean learning mode disabled (timeout)")
 
@@ -284,6 +543,11 @@ class EnOceanDongle:
                 # Do not dispatch the generic receive signal for teach-in packets
                 return
 
+            # Validate packet before dispatching
+            if not self._validate_and_track_packet(packet):
+                # Packet is invalid, don't dispatch to entities
+                return
+
             # Non-teach-in: Dispatch RSSI update if present
             if hasattr(packet, "dBm") and packet.dBm is not None:
                 device_id = packet.sender
@@ -297,6 +561,7 @@ class EnOceanDongle:
                 )
 
             # Schedule message dispatch in event loop thread-safely
+            # Only valid packets reach this point
             self.hass.loop.call_soon_threadsafe(
                 lambda: dispatcher_send(self.hass, SIGNAL_RECEIVE_MESSAGE, packet)
             )

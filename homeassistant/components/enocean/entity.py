@@ -45,9 +45,6 @@ class EnOceanEntity(Entity):
         self._attr_has_entity_name = True
         self._attr_name = attr_name or data_field
         # Use data_field for unique_id to ensure registry stability
-        # Track out-of-range warnings to avoid spam
-        self._out_of_range_warning_logged = False
-        self._invalid_enum_warning_logged = False
         self._attr_unique_id = f"{format_device_id_hex_underscore(self.dev_id)}-{data_field.lower().replace(' ', '_')}"
         # Store device display name separately and expose via device_info
         self._data_field = data_field
@@ -85,186 +82,22 @@ class EnOceanEntity(Entity):
 
     @callback
     def _message_received_callback(self, packet):
-        """Handle incoming packets."""
+        """Handle incoming packets.
 
+        Note: Packet validation is handled by the dongle before dispatch.
+        Only valid packets reach this callback.
+        """
         # Skip teach-in packets (RORG 0xD4) - they don't contain sensor data
         if hasattr(packet, "rorg") and packet.rorg == 0xD4:
             return
 
         # Compare packet sender with device id
         if packet.sender == self.dev_id:
-            # Check if any parsed fields are out of range
-            if self._has_out_of_range_fields(packet):
-                # Only log detailed warning once per device to avoid spam
-                if not self._out_of_range_warning_logged:
-                    self._log_invalid_packet_warning(packet)
-                    self._out_of_range_warning_logged = True
-                return
-
-            # Check if any enum fields have invalid values
-            if self._has_invalid_enum_fields(packet):
-                # Only log detailed warning once per device to avoid spam
-                if not self._invalid_enum_warning_logged:
-                    self._log_invalid_enum_warning(packet)
-                    self._invalid_enum_warning_logged = True
-                return
-
-            # Reset warning flags if we receive valid data
-            self._out_of_range_warning_logged = False
-            self._invalid_enum_warning_logged = False
             self.value_changed(packet)
 
     @callback
     def value_changed(self, packet):
         """Update the internal state of the device when a packet arrives."""
-
-    def _has_out_of_range_fields(self, packet) -> bool:
-        """Check if packet has any fields with out-of-range values.
-
-        Args:
-            packet: EnOcean packet with parsed data
-
-        Returns:
-            True if any field is out of range, False otherwise
-        """
-        if not hasattr(packet, "parsed") or not packet.parsed:
-            return False
-
-        has_out_of_range = False
-        for field_name, field_data in packet.parsed.items():
-            if isinstance(field_data, dict) and field_data.get("out_of_range", False):
-                # Log details about the out-of-range field
-                value = field_data.get("value")
-                raw_value = field_data.get("raw_value")
-                description = field_data.get("description", field_name)
-                unit = field_data.get("unit", "")
-
-                LOGGER.warning(
-                    "Field '%s' (%s) is out of range: value=%s, raw_value=%s%s",
-                    field_name,
-                    description,
-                    value,
-                    raw_value,
-                    f" {unit}" if unit else "",
-                )
-                has_out_of_range = True
-        return has_out_of_range
-
-    def _has_invalid_enum_fields(self, packet) -> bool:
-        """Check if packet has any enum fields with invalid values.
-
-        Args:
-            packet: EnOcean packet with parsed data
-
-        Returns:
-            True if any enum field has invalid value, False otherwise
-        """
-        if not hasattr(packet, "parsed") or not packet.parsed:
-            return False
-
-        has_invalid_enum = False
-        for field_name, field_data in packet.parsed.items():
-            if isinstance(field_data, dict) and field_data.get("invalid_enum", False):
-                # Log details about the invalid enum field
-                value = field_data.get("value")
-                raw_value = field_data.get("raw_value")
-                description = field_data.get("description", field_name)
-                unit = field_data.get("unit", "")
-
-                LOGGER.warning(
-                    "Field '%s' (%s) has invalid enum value: value=%s, raw_value=%s%s",
-                    field_name,
-                    description,
-                    value,
-                    raw_value,
-                    f" {unit}" if unit else "",
-                )
-                has_invalid_enum = True
-        return has_invalid_enum
-
-    def _log_invalid_packet_warning(self, packet):
-        """Log warning for packets with out-of-range values in the same format as debug messages.
-
-        Args:
-            packet: EnOcean packet with invalid data
-        """
-        try:
-            # Format sender and destination addresses
-            sender = format_device_id_hex(
-                packet.sender if hasattr(packet, "sender") else self.dev_id
-            )
-
-            # Get signal strength if available
-            dbm = packet.dBm if hasattr(packet, "dBm") else 0
-
-            # Collect out-of-range fields info
-            out_of_range_fields = []
-            all_parsed_values = {}
-            if packet.parsed:
-                for field_name, field_data in packet.parsed.items():
-                    if isinstance(field_data, dict):
-                        value = field_data.get("value", field_data.get("raw_value"))
-                        all_parsed_values[field_name] = value
-                        if field_data.get("out_of_range", False):
-                            raw_value = field_data.get("raw_value")
-                            unit = field_data.get("unit", "")
-                            out_of_range_fields.append(
-                                f"{field_name}={value} (raw={raw_value}){f' {unit}' if unit else ''}"
-                            )
-                    else:
-                        all_parsed_values[field_name] = field_data
-
-            LOGGER.warning(
-                "Ignoring packet from %s with out-of-range fields: [%s]. All values: %s (Signal: %d dBm)",
-                sender,
-                ", ".join(out_of_range_fields),
-                all_parsed_values,
-                dbm,
-            )
-        except Exception as err:  # noqa: BLE001
-            LOGGER.debug("Error formatting invalid packet warning: %s", err)
-
-    def _log_invalid_enum_warning(self, packet):
-        """Log warning for packets with invalid enum values.
-
-        Args:
-            packet: EnOcean packet with invalid enum data
-        """
-        try:
-            # Format sender address
-            sender = format_device_id_hex(
-                packet.sender if hasattr(packet, "sender") else self.dev_id
-            )
-
-            # Get signal strength if available
-            dbm = packet.dBm if hasattr(packet, "dBm") else 0
-
-            # Collect invalid enum fields info
-            invalid_enum_fields = []
-            all_parsed_values = {}
-            if packet.parsed:
-                for field_name, field_data in packet.parsed.items():
-                    if isinstance(field_data, dict):
-                        value = field_data.get("value", field_data.get("raw_value"))
-                        all_parsed_values[field_name] = value
-                        if field_data.get("invalid_enum", False):
-                            raw_value = field_data.get("raw_value")
-                            unit = field_data.get("unit", "")
-                            invalid_enum_fields.append(
-                                f"{field_name}={value} (raw={raw_value}){f' {unit}' if unit else ''}"
-                            )
-                    else:
-                        all_parsed_values[field_name] = field_data
-
-            LOGGER.warning(
-                "Ignoring packet from %s with invalid enum values: [%s]. All values: %s (Signal: %d dBm)",
-                sender,
-                ", ".join(invalid_enum_fields),
-                all_parsed_values,
-                dbm,
-            )
-        except Exception as err:  # noqa: BLE001
-            LOGGER.debug("Error formatting invalid enum warning: %s", err)
 
     def send_command(self, data, optional, packet_type):
         """Send a command via the EnOcean dongle."""
@@ -368,10 +201,12 @@ class EnOceanEntity(Entity):
                 }
 
                 LOGGER.debug(
-                    "Creating MSC packet for %s: manufacturer=0x%03x, cmd=%s, kwargs=%s",
+                    "Creating MSC packet for %s: manufacturer=0x%03x, cmd=%s, sender=%s (type: %s), kwargs=%s",
                     format_device_id_hex(self.dev_id),
                     manufacturer,
                     cmd,
+                    sender,
+                    type(sender).__name__,
                     kwargs,
                 )
 

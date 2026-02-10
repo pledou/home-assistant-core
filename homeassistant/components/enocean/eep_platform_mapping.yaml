@@ -344,19 +344,23 @@
   0x01:
     0x00:
       entities:
-        - name: "TEMPCELEC"
+        - component: select
+          name: "TEMPCELEC"
           config:
             command_template: >-
               {"MSC":"1","CMD":"0","TEMPEL":{{value}}, "send":"clear"}
-        - name: "TEMPMSOUFFL"
+        - component: number
+          name: "TEMPMSOUFFL"
           config:
             command_template: >-
               {"MSC":"1","CMD":"0","TEMPSOUF":{{value}}, "send":"clear"}
-        - name: "TEMPCHYDROR"
+        - component: select
+          name: "TEMPCHYDROR"
           config:
             command_template: >-
               {"MSC":"1","CMD":"0","TEMPHYD":{{value}}, "send":"clear"}
-        - name: "TEMPSOL"
+        - component: select
+          name: "TEMPSOL"
           config:
             command_template: >-
               {"MSC":"1","CMD":"0","TEMPSOL":"{{value}}", "send":"clear"}
@@ -434,8 +438,12 @@
           entity_category: "diagnostic"
         - name: "AINST"
           entity_category: "diagnostic"
-        - component: sensor
+        - component: select
           name: "MF"
           config:
             command_template: >-
               {"MSC":"1","CMD":"0","MODEFONC":"{{value}}", "send":"clear"}
+        - component: sensor
+          name: "CVITM"
+        - component: sensor
+          name: "PIECEAPP"

@@ -169,10 +169,12 @@ def _extract_eep_fields(
                                 except (ValueError, TypeError):
                                     pass
 
-                # Extract enum items
+                # Extract enum items (both <item> and <rangeitem>)
                 items = None
                 if field_type == "enum":
                     item_list = []
+
+                    # Process regular <item> elements
                     for item in element.find_all("item"):
                         raw_val = item.get("value")
                         try:
@@ -182,6 +184,23 @@ def _extract_eep_fields(
                         item_list.append(
                             {"value": val, "description": item.get("description", "")}
                         )
+
+                    # Process <rangeitem> elements (expand range into individual items)
+                    for rangeitem in element.find_all("rangeitem"):
+                        try:
+                            start = int(rangeitem.get("start", 0))
+                            end = int(rangeitem.get("end", 0))
+                            desc_template = rangeitem.get("description", "{value}")
+
+                            # Expand range into individual items
+                            for val in range(start, end + 1):
+                                # Replace {value} placeholder in description
+                                desc = desc_template.replace("{value}", str(val))
+                                item_list.append({"value": val, "description": desc})
+                        except (ValueError, TypeError, AttributeError):
+                            # Skip invalid rangeitems
+                            continue
+
                     if item_list:
                         items = item_list
 

@@ -415,6 +415,7 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
                 key=data_field or "sensor",
                 name=attr_name or data_field or dev_name,
             ),
+            fields=fields,
         )
 
         # Initialize shared dynamic behaviour

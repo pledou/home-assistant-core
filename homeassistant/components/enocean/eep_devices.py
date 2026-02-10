@@ -607,14 +607,7 @@ def _apply_mapping_to_entity(
     if mapping_def.get("component"):
         component_str = mapping_def["component"]
         try:
-            old_type = eep_entity.entity_type
             eep_entity.entity_type = EntityType(component_str)
-            _LOGGER.debug(
-                "Overrode entity type for %s from %s to %s",
-                data_field,
-                old_type,
-                eep_entity.entity_type,
-            )
         except ValueError:
             _LOGGER.warning(
                 "Unknown component type '%s' in mapping for %s, keeping auto-classified %s",

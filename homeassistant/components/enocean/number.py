@@ -79,6 +79,7 @@ class EnOceanNumber(RestoreNumber, EnOceanEntity):
         unit: str | None = None,
         attr_name: str | None = None,
         dev_class: str | None = None,
+        fields: EEPEntityDef | None = None,
     ) -> None:
         """Initialize the EnOcean number entity."""
         EnOceanEntity.__init__(
@@ -88,6 +89,7 @@ class EnOceanNumber(RestoreNumber, EnOceanEntity):
             attr_name=attr_name,
             dev_name=dev_name,
             dev_class=dev_class,
+            fields=fields,
         )
         if min_value is not None:
             self._attr_native_min_value = min_value
@@ -127,6 +129,7 @@ class DynamicEnOceanNumber(DynamicEnoceanEntity, EnOceanNumber):
             data_field=data_field,
             attr_name=attr_name,
             dev_class=dev_class,
+            fields=fields,
         )
         DynamicEnoceanEntity.__init__(
             self,
@@ -182,23 +185,7 @@ class DynamicEnOceanNumber(DynamicEnoceanEntity, EnOceanNumber):
             self._attr_mode = extracted_mode  # type: ignore[assignment]
 
         # Store command template for sending values to device if present
-        if extracted_command_template is not None:
-            self._command_template = extracted_command_template
-
-        # Debug: surface whether a command_template was discovered and some
-        # surrounding context to aid troubleshooting when sending values.
-        # Best-effort debug information; don't raise on logging issues
-        with suppress(Exception):
-            LOGGER.debug(
-                "EnOcean number init %s: command_template_found=%s, rorg=0x%02x, func=0x%02x, type=0x%02x, data_field=%s, fields_present=%s",
-                self._attr_unique_id,
-                bool(self._command_template),
-                rorg,
-                rorg_func,
-                rorg_type,
-                data_field,
-                "yes" if fields is not None else "no",
-            )
+        self._command_template = extracted_command_template
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new value and send command to device if template available."""

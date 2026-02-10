@@ -9,7 +9,6 @@ from os.path import basename, normpath
 from enocean.communicators import SerialCommunicator
 from enocean.protocol.constants import RORG
 from enocean.protocol.packet import RadioPacket
-from enocean.protocol.parser import Parser
 import serial
 
 from homeassistant.config_entries import ConfigEntry
@@ -239,28 +238,16 @@ class EnOceanDongle:
 
             # Systematically parse packets based on known EEP profiles
             # This ensures packet.parsed is populated before dispatching to entities
-            self._parse_packet_by_profile(packet)
-
-            if hasattr(packet, "dBm") and packet.dBm is not None:
-                device_id = packet.sender
-                # Dispatch RSSI update to registered RSSI sensor entities
-                self.hass.loop.call_soon_threadsafe(
-                    lambda: dispatcher_send(
-                        self.hass,
-                        f"{SIGNAL_RECEIVE_MESSAGE}_rssi_{format_device_id_hex(device_id)}",
-                        packet.dBm,
-                    )
-                )
-
-            # Schedule message dispatch in event loop thread-safely
-            self.hass.loop.call_soon_threadsafe(
-                lambda: dispatcher_send(self.hass, SIGNAL_RECEIVE_MESSAGE, packet)
-            )
+            # Skip UTE teach-in packets (0xD4) - they don't have data profiles
+            if packet.rorg != RORG.UTE:
+                self._parse_packet_by_profile(packet)
 
             # Trigger discovery for new devices
             device_id = packet.sender
 
             # For learning mode we only accept UTE teach-in packets (0xD4)
+            # Handle teach-in before dispatching general receive signals so
+            # the registered profile is available to listeners.
             if self._communicator.teach_in:
                 if packet.rorg != RORG.UTE:
                     return
@@ -293,7 +280,26 @@ class EnOceanDongle:
                         self.hass, SIGNAL_DISCOVER_DEVICE, discovery_info
                     )
                 )
+
+                # Do not dispatch the generic receive signal for teach-in packets
                 return
+
+            # Non-teach-in: Dispatch RSSI update if present
+            if hasattr(packet, "dBm") and packet.dBm is not None:
+                device_id = packet.sender
+                # Dispatch RSSI update to registered RSSI sensor entities
+                self.hass.loop.call_soon_threadsafe(
+                    lambda: dispatcher_send(
+                        self.hass,
+                        f"{SIGNAL_RECEIVE_MESSAGE}_rssi_{format_device_id_hex(device_id)}",
+                        packet.dBm,
+                    )
+                )
+
+            # Schedule message dispatch in event loop thread-safely
+            self.hass.loop.call_soon_threadsafe(
+                lambda: dispatcher_send(self.hass, SIGNAL_RECEIVE_MESSAGE, packet)
+            )
 
             # Process sensors from Ventilairsec MSC packets (Command 8)
             # This extracts sensor information and creates child devices/entities
@@ -329,10 +335,6 @@ class EnOceanDongle:
         """
         device_key = tuple(device_id) if isinstance(device_id, list) else (device_id,)
         self._devices_with_entities.add(device_key)
-        _LOGGER.debug(
-            "Marked device %s as having entities",
-            format_device_id_hex(list(device_key)),
-        )
 
     async def async_load_device_profiles(self) -> None:
         """Load device profiles from config entry storage.
@@ -453,9 +455,6 @@ class EnOceanDongle:
         if not profile:
             # No known profile for this device yet
             return
-        if getattr(packet, "rorg_of_eep", None) != profile["rorg"]:
-            # Packet's RORG doesn't match profile's RORG - can't parse, ex: UTE teach-in response
-            return
 
         # Extract command if present (for MSC and VLD packets)
         # For MSC packets, packet.cmd is already set by the enocean library
@@ -463,14 +462,16 @@ class EnOceanDongle:
         command = getattr(packet, "cmd", None)
 
         try:
-            # Create parser with the device's EEP profile
-            parser = Parser(
-                rorg=profile["rorg"], func=profile["func"], type_=profile["type"]
+            # Use the packet's own parse_eep method which populates packet.parsed
+            # with the full nested structure expected by entities
+            packet.parse_eep(
+                rorg_func=profile["func"],
+                rorg_type=profile["type"],
+                direction=None,
+                command=command,
             )
-            parsed_result = parser.parse_packet(packet.data, command=command)
 
-            if parsed_result:
-                packet.parsed = parsed_result
+            if packet.parsed:
                 # Safely stringify packet.data whether it's bytes or a list of ints
                 if packet.data:
                     if isinstance(packet.data, (bytes, bytearray)):
@@ -488,11 +489,11 @@ class EnOceanDongle:
                 _LOGGER.info(
                     "Parsed packet from %s using registered profile: %s, data: %s, parsed values: %s",
                     format_device_id_hex(packet.sender),
-                    list(parsed_result.keys()) if parsed_result else "empty",
+                    list(packet.parsed.keys()) if packet.parsed else "empty",
                     data_hex,
                     {
                         k: v
-                        for k, v in parsed_result.items()
+                        for k, v in packet.parsed.items()
                         if isinstance(v, (int, str, bool))
                     },
                 )

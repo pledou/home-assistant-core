@@ -77,6 +77,7 @@ class EnOceanButton(EnOceanEntity, ButtonEntity):
         dev_name: str,
         channel: int,
         button_name: str,
+        fields: EEPEntityDef | None = None,
     ) -> None:
         """Initialize the EnOcean button device."""
         super().__init__(
@@ -84,6 +85,7 @@ class EnOceanButton(EnOceanEntity, ButtonEntity):
             data_field=f"{button_name}_{channel}",
             attr_name=button_name,
             dev_name=dev_name,
+            fields=fields,
         )
         self.channel = channel
         self._attr_name = f"{dev_name} {button_name}"

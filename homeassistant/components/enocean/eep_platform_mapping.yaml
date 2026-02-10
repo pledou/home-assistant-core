@@ -344,28 +344,20 @@
   0x01:
     0x00:
       entities:
-        - component: number
-          name: "TEMPCELEC"
+        - name: "TEMPCELEC"
           config:
-            mode: "slider"
             command_template: >-
               {"MSC":"1","CMD":"0","TEMPEL":{{value}}, "send":"clear"}
-        - component: number
-          name: "TEMPMSOUFFL"
+        - name: "TEMPMSOUFFL"
           config:
-            mode: "slider"
             command_template: >-
               {"MSC":"1","CMD":"0","TEMPSOUF":{{value}}, "send":"clear"}
-        - component: number
-          name: "TEMPCHYDROR"
+        - name: "TEMPCHYDROR"
           config:
-            mode: "slider"
             command_template: >-
               {"MSC":"1","CMD":"0","TEMPHYD":{{value}}, "send":"clear"}
-        - component: number
-          name: "TEMPSOL"
+        - name: "TEMPSOL"
           config:
-            mode: "slider"
             command_template: >-
               {"MSC":"1","CMD":"0","TEMPSOL":"{{value}}", "send":"clear"}
         - component: switch
@@ -392,10 +384,8 @@
             max: "365"
             step: "1"
             mode: "box"
-        - component: sensor
-          name: "CERR2"
-          config:
-            value_template: "{{ value_parsed.get('CERR2', 'unknown') }}"
+            command_template: >-
+              {"MSC":"1","CMD":"0","VACS":{{value}}, "send":"clear"}
         - component: sensor
           name: "ETATS"
         - component: sensor

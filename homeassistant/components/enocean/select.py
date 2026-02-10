@@ -61,6 +61,7 @@ class EnOceanSelect(EnOceanEntity, SelectEntity):
         options: list[str] | None = None,
         entity_name: str | None = None,
         attr_name: str | None = None,
+        fields: EEPEntityDef | None = None,
     ) -> None:
         """Initialize the select entity."""
         EnOceanEntity.__init__(
@@ -70,6 +71,7 @@ class EnOceanSelect(EnOceanEntity, SelectEntity):
             dev_name=dev_name,
             dev_class=None,
             attr_name=attr_name or entity_name,
+            fields=fields,
         )
         SelectEntity.__init__(self)
         self._data_field: str = data_field or dev_name
@@ -171,6 +173,7 @@ class DynamicEnOceanSelect(DynamicEnoceanEntity, EnOceanSelect):
             data_field=data_field,
             options=options,
             attr_name=attr_name,
+            fields=fields,
         )
 
         # Store command template for sending selected option when available

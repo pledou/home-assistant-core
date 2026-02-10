@@ -116,6 +116,7 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
         attr_name: str | None = None,
         dev_name: str | None = None,
         channel: int | None = None,
+        fields: EEPEntityDef | None = None,
     ) -> None:
         """Initialize the EnOcean switch device."""
         # Use channel as part of the data_field for unique ID if provided
@@ -131,6 +132,7 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
             attr_name=attr_name or data_field,
             dev_name=dev_name,
             dev_class=None,
+            fields=fields,
         )
         self._light = None
         self.channel = channel
@@ -240,6 +242,7 @@ class DynamicEnOceanSwitch(DynamicEnoceanEntity, EnOceanSwitch):
             attr_name=attr_name,
             dev_name=dev_name,
             channel=channel,
+            fields=fields,
         )
 
         # Apply switch-specific device_class from EEPEntityDef if available

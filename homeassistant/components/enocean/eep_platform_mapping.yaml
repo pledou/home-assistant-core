@@ -348,24 +348,24 @@
           name: "TEMPCELEC"
           config:
             command_template: >-
-              {"MSC":"1","CMD":"0","TEMPEL":{{value}}, "send":"clear"}
+              {"MSC":"1","CMD":"0","TEMPEL":{{value}},"COMMAND":"1","send":"clear"}
         - component: number
           name: "TEMPMSOUFFL"
           config:
             mode: "box"
             unit: "°C"
             command_template: >-
-              {"MSC":"1","CMD":"0","TEMPSOUF":{{value}}, "send":"clear"}
+              {"MSC":"1","CMD":"0","TEMPSOUF":{{value}},"COMMAND":"1","send":"clear"}
         - component: select
           name: "TEMPCHYDROR"
           config:
             command_template: >-
-              {"MSC":"1","CMD":"0","TEMPHYD":{{value}}, "send":"clear"}
+              {"MSC":"1","CMD":"0","TEMPHYD":{{value}},"COMMAND":"1","send":"clear"}
         - component: select
           name: "TEMPSOL"
           config:
             command_template: >-
-              {"MSC":"1","CMD":"0","TEMPSOL":"{{value}}", "send":"clear"}
+              {"MSC":"1","CMD":"0","TEMPSOL":{{value}},"COMMAND":"1","send":"clear"}
         - component: switch
           name: "SURV"
           config:
@@ -383,7 +383,7 @@
             step: "1"
             mode: "box"
             command_template: >-
-              {"MSC":"1","command":"0","BOOST":{{value}}, "send":"clear"}
+              {"MSC":"1","command":"0","BOOST":{{value}}, "COMMAND":"1","send":"clear"}
         - component: number
           name: "VAC"
           config:
@@ -393,7 +393,7 @@
             step: "1"
             mode: "box"
             command_template: >-
-              {"MSC":"1","CMD":"0","VACS":{{value}}, "send":"clear"}
+              {"MSC":"1","CMD":"0","VACS":{{value}}, "COMMAND":"1","send":"clear"}
         - component: sensor
           name: "ETATS"
         - component: sensor
@@ -468,3 +468,16 @@
           name: "PIECEAPP"
         - component: sensor
           name: "CPDIFF"
+        - component: sensor
+          name: "LAST_DATA_RECEIVED"
+          config:
+            device_class: "timestamp"
+            entity_category: "diagnostic"
+            icon: "mdi:clock-outline"
+        - component: button
+          name: "REFRESH_DATA"
+          config:
+            command_template: >-
+              {"MSC":"1","CMD":"0","COMMAND":"1"}
+            entity_category: "diagnostic"
+            icon: "mdi:refresh"

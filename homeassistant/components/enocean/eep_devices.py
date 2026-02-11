@@ -229,6 +229,7 @@ def _extract_eep_fields(
                     enum_options=(
                         [it["description"] for it in (items or [])] if items else None
                     ),
+                    enum_items=items,  # Store full items with values and descriptions
                     offset=offset,
                 )
                 # Apply smart auto-detection for device properties
@@ -592,7 +593,9 @@ def get_entities_for_device(eep_profile: EepProfile) -> list[EEPEntityDef]:
         if func_entry:
             type_entry = func_entry.get(rorg_type)
             if type_entry and type_entry.get("entities"):
-                entities = _overlay_mapping_overrides(entities, type_entry)
+                entities = _overlay_mapping_overrides(
+                    entities, type_entry, rorg, rorg_func, rorg_type
+                )
 
     _LOGGER.debug(
         "Built %d entities from EEP profile with mapping overrides (RORG=%s FUNC=%s TYPE=%s)",
@@ -606,18 +609,26 @@ def get_entities_for_device(eep_profile: EepProfile) -> list[EEPEntityDef]:
 
 
 def _overlay_mapping_overrides(
-    eep_entities: list[EEPEntityDef], type_entry: dict
+    eep_entities: list[EEPEntityDef],
+    type_entry: dict,
+    rorg: int,
+    rorg_func: int,
+    rorg_type: int,
 ) -> list[EEPEntityDef]:  # pylint: disable=too-many-nested-blocks
     """Overlay YAML mapping overrides onto EEP-derived entities.
 
     For each mapping entity, find the matching EEP entity by data_field name
-    and update its properties with mapping values.
+    and update its properties with mapping values. If a mapping entity has no
+    matching EEP entity, create a new entity from the mapping definition.
 
     Args:
         eep_entities: List of entities from EEP extraction
         type_entry: Mapping type_entry dict with 'entities' list
+        rorg: RORG value for the profile
+        rorg_func: FUNC value for the profile
+        rorg_type: TYPE value for the profile
 
-    Returns: Updated entities list with mapping overrides applied.
+    Returns: Updated entities list with mapping overrides applied and new mapping-only entities added.
     """
     # Build lookup of mapping entities by name (data_field)
     mapping_lookup = {}
@@ -626,13 +637,115 @@ def _overlay_mapping_overrides(
         if name:
             mapping_lookup[name] = entity_def
 
+    # Track which mapping entities were matched
+    matched_mapping_names = set()
+
     # Apply overrides to matching EEP entities
     for eep_entity in eep_entities:
         data_field = eep_entity.data_field
         if data_field in mapping_lookup:
             mapping_def = mapping_lookup[data_field]
             _apply_mapping_to_entity(mapping_def, eep_entity, data_field)
+            matched_mapping_names.add(data_field)
+
+    # Create new entities for mapping-only definitions (not in EEP.xml)
+    for name, mapping_def in mapping_lookup.items():
+        if name not in matched_mapping_names:
+            new_entity = _create_entity_from_mapping(
+                mapping_def, name, rorg, rorg_func, rorg_type
+            )
+            if new_entity:
+                eep_entities.append(new_entity)
+                _LOGGER.debug(
+                    "Created new entity from mapping-only definition: %s (type=%s)",
+                    name,
+                    new_entity.entity_type,
+                )
+
     return eep_entities
+
+
+def _create_entity_from_mapping(
+    mapping_def: dict, name: str, rorg: int, rorg_func: int, rorg_type: int
+) -> EEPEntityDef | None:
+    """Create a new EEPEntityDef from a mapping definition alone.
+
+    Used for entities that exist only in the YAML mapping, not in EEP.xml.
+    This enables custom diagnostic entities and platform-specific features.
+
+    Args:
+        mapping_def: Single entity definition from mapping YAML
+        name: Entity name (data_field)
+        rorg: RORG value for the profile
+        rorg_func: FUNC value for the profile
+        rorg_type: TYPE value for the profile
+
+    Returns: New EEPEntityDef instance or None if creation failed.
+    """
+    config = mapping_def.get("config", {})
+
+    # Determine entity type from component field
+    component_str = mapping_def.get("component", "sensor")
+    try:
+        entity_type = EntityType(component_str)
+    except ValueError:
+        _LOGGER.warning(
+            "Unknown component type '%s' in mapping for %s, defaulting to sensor",
+            component_str,
+            name,
+        )
+        entity_type = EntityType.SENSOR
+
+    # Create the entity with mapping values
+    entity = EEPEntityDef(
+        description=name,  # Use field name as description
+        rorg=rorg,
+        rorg_func=rorg_func,
+        rorg_type=rorg_type,
+        data_field=name,
+        entity_type=entity_type,
+    )
+
+    # Apply all config properties
+    if config.get("unit"):
+        entity.unit = config["unit"]
+
+    if config.get("device_class"):
+        entity.device_class = config["device_class"]
+
+    if config.get("min") is not None:
+        with contextlib.suppress(ValueError, TypeError):
+            entity.min_value = float(config["min"])
+
+    if config.get("max") is not None:
+        with contextlib.suppress(ValueError, TypeError):
+            entity.max_value = float(config["max"])
+
+    if config.get("options"):
+        entity.enum_options = config["options"]
+
+    if config.get("value_template"):
+        entity.value_template = config["value_template"]
+
+    if config.get("icon"):
+        entity.icon = config["icon"]
+
+    if config.get("state_class"):
+        entity.state_class = config["state_class"]
+
+    if config.get("entity_category"):
+        val = config["entity_category"]
+        resolved = _resolve_entity_category(val)
+        if resolved is not None:
+            entity.entity_category = resolved
+
+    if config.get("command_template"):
+        entity.command_template = config["command_template"]
+
+    if config.get("mode"):
+        entity.mode = config["mode"]
+
+    return entity
 
 
 def _apply_mapping_to_entity(

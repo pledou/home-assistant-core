@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import struct
 
 import voluptuous as vol
@@ -30,6 +31,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv, template
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import EntityCategory  # type: ignore[attr-defined]
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DATA_ENOCEAN, LOGGER, SIGNAL_RECEIVE_MESSAGE
@@ -116,6 +118,7 @@ def _select_sensor_class(entity_def: EEPEntityDef):
 
     Current routing:
     - RSSI sensors: EnOceanRSSISensor (subscribes to dongle RSSI updates)
+    - LAST_DATA_RECEIVED: LastDataReceivedSensor (tracks packet timestamp)
     - Other sensors: DynamicEnOceanSensor (generic EEP parser-based sensor)
 
     Future extensions could route:
@@ -133,6 +136,10 @@ def _select_sensor_class(entity_def: EEPEntityDef):
     # RSSI sensors use dedicated class with dongle subscription
     if entity_def.data_field == "RSSI":
         return EnOceanRSSISensor
+
+    # Last data received timestamp sensor
+    if entity_def.data_field == "LAST_DATA_RECEIVED":
+        return LastDataReceivedSensor
 
     # Future: Add more specialized routing here based on:
     # - entity_def.device_class (e.g., specific handling for certain types)
@@ -533,3 +540,45 @@ class DynamicEnOceanSensor(DynamicEnoceanEntity, EnOceanSensor):
                 self._attr_name,
                 err,
             )
+
+
+class LastDataReceivedSensor(DynamicEnOceanSensor):
+    """Special sensor that tracks the timestamp of the last received packet.
+
+    This sensor doesn't read from packet.parsed like other sensors.
+    Instead, it captures the arrival time whenever any packet is received.
+    """
+
+    def __init__(
+        self,
+        dev_id: list[int],
+        dev_name: str,
+        rorg: int,
+        rorg_func: int,
+        rorg_type: int,
+        fields: EEPEntityDef | None = None,
+    ) -> None:
+        """Initialize the last data received timestamp sensor."""
+        # Initialize as DynamicEnOceanSensor with special data_field
+        super().__init__(
+            dev_id=dev_id,
+            dev_name=dev_name,
+            data_field="LAST_DATA_RECEIVED",
+            rorg=rorg,
+            rorg_func=rorg_func,
+            rorg_type=rorg_type,
+            fields=fields,
+        )
+        # Override device_class to timestamp
+        self._attr_device_class = SensorDeviceClass.TIMESTAMP
+        # Set entity category to diagnostic
+        if not self._attr_entity_category:
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @callback
+    def value_changed(self, packet):
+        """Update timestamp when any packet arrives from this device."""
+
+        # Store current UTC timestamp
+        self._attr_native_value = datetime.now(UTC)
+        self.schedule_update_ha_state()
